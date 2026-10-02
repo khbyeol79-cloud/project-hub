@@ -1,0 +1,23 @@
+[Unit]
+Description=Project Hub verified Google Drive backup
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@ROOT@
+ExecStart=@DEPLOY@/.venv/bin/python -u @DEPLOY@/backup.py run
+Restart=on-failure
+RestartSec=5min
+TimeoutStartSec=45min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+Environment=PYTHONDONTWRITEBYTECODE=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=project-hub-backup

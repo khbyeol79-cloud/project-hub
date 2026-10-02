@@ -17,12 +17,18 @@ if __package__:
     from .upload_queue import UploadWorker, write_metadata
     from .history import HistoryCollector
     from .monitoring import HealthMonitor
+    from .file_search import SearchCommands
+    from .content_search import ContentIndexer, initialize as initialize_content
+    from . import message_archive
 else:
     import database
     from drive import CATEGORY_FOLDERS
     from upload_queue import UploadWorker, write_metadata
     from history import HistoryCollector
     from monitoring import HealthMonitor
+    from file_search import SearchCommands
+    from content_search import ContentIndexer, initialize as initialize_content
+    import message_archive
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = BASE_DIR / "storage"
@@ -83,6 +89,11 @@ class CollectorClient(discord.Client):
     history_collector = None
     monitor_task = None
     health_monitor = None
+    content_task = None
+    content_indexer = None
+    message_archive = None
+    message_collector = None
+    message_task = None
 
     async def setup_hook(self):
         alert_channel = os.getenv("DISCORD_ALERT_CHANNEL_ID", "").strip()
@@ -94,8 +105,27 @@ class CollectorClient(discord.Client):
         self.history_task = asyncio.create_task(self.history_collector.run())
         self.health_monitor = HealthMonitor(self, {**CHANNEL_MAP, **FORUM_MAP}, alert_channel)
         self.monitor_task = asyncio.create_task(self.health_monitor.run())
+        await asyncio.to_thread(initialize_content)
+        self.content_indexer = ContentIndexer(STORAGE_DIR)
+        self.content_task = asyncio.create_task(self.content_indexer.run())
+        await asyncio.to_thread(message_archive.initialize)
+        self.message_archive = message_archive.MessageArchive(self, CHANNEL_MAP, FORUM_MAP)
+        self.message_collector = HistoryCollector(self, CHANNEL_MAP, self.message_archive.save,
+            forums=FORUM_MAP, cursor_store=message_archive, health_prefix='messages:')
+        self.message_collector.initialize()
+        self.message_task = asyncio.create_task(self.message_collector.run())
 
     async def close(self):
+        if self.message_task:
+            self.message_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.message_task
+            self.message_task = None
+        if self.content_task:
+            self.content_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.content_task
+            self.content_task = None
         if self.monitor_task:
             self.monitor_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -117,6 +147,7 @@ class CollectorClient(discord.Client):
 intents = discord.Intents.default()
 intents.message_content = True
 client = CollectorClient(intents=intents)
+search_commands = SearchCommands(client)
 
 
 @client.event
@@ -125,18 +156,27 @@ async def on_ready():
     logger.info("FORUM_COLLECTION | forums=%d", len(FORUM_MAP))
     if client.history_collector:
         client.history_collector.wakeup.set()
+    if client.message_collector:
+        client.message_collector.wakeup.set()
+        logger.info('MESSAGE_ARCHIVE_READY | channels=%s | forums=%s | initial_hours=24',
+                    len(CHANNEL_MAP), len(FORUM_MAP))
+    await search_commands.sync({**CHANNEL_MAP, **FORUM_MAP})
 
 
 @client.event
 async def on_resumed():
     if client.history_collector:
         client.history_collector.wakeup.set()
+    if client.message_collector:
+        client.message_collector.wakeup.set()
 
 
 @client.event
 async def on_thread_create(thread):
     if str(thread.parent_id) in FORUM_MAP and client.history_collector:
         client.history_collector.wakeup.set()
+    if str(thread.parent_id) in FORUM_MAP and client.message_collector:
+        client.message_collector.wakeup.set()
 
 
 async def collect_attachment(message, attachment, index, category):
@@ -216,12 +256,40 @@ async def process_message(message, *, upload=True):
 
 @client.event
 async def on_message(message):
+    if client.message_archive:
+        await client.message_archive.save(message)
     if client.health_monitor:
         try:
             await client.health_monitor.handle_status(message)
         except Exception as exc:
             logger.error("STATUS_RESPONSE_FAILED | error=%s", type(exc).__name__)
     await process_message(message)
+
+
+async def archive_event(action, payload):
+    if client.message_archive is None:
+        return
+    try:
+        await getattr(client.message_archive, action)(payload)
+        await asyncio.to_thread(database.record_health, 'messages:events')
+    except Exception as error:
+        logger.error('MESSAGE_EVENT_FAILED | action=%s | error=%s', action, type(error).__name__)
+        await asyncio.to_thread(database.record_health, 'messages:events', type(error).__name__)
+
+
+@client.event
+async def on_raw_message_edit(payload):
+    await archive_event('edited', payload)
+
+
+@client.event
+async def on_raw_message_delete(payload):
+    await archive_event('deleted', payload)
+
+
+@client.event
+async def on_raw_bulk_message_delete(payload):
+    await archive_event('deleted', payload)
 
 
 def main():

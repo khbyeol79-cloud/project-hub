@@ -146,13 +146,19 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
             history_task = client.history_task
             retry_task = client.retry_task
             monitor_task = client.monitor_task
+            content_task = client.content_task
+            message_task = client.message_task
             with patch.object(bot, "client", client):
                 await bot.on_ready()
                 client.history_collector.wakeup.clear()
+                client.message_collector.wakeup.clear()
                 await bot.on_resumed()
             self.assertTrue(client.history_collector.wakeup.is_set())
+            self.assertTrue(client.message_collector.wakeup.is_set())
             self.assertIs(client.history_task, history_task)
             await asyncio.sleep(0)
         self.assertTrue(history_task.cancelled())
         self.assertTrue(retry_task.cancelled())
         self.assertTrue(monitor_task.cancelled())
+        self.assertTrue(content_task.cancelled())
+        self.assertTrue(message_task.cancelled())
