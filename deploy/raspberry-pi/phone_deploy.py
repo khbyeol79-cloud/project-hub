@@ -75,7 +75,6 @@ def restore(root, backup, manifest):
 def healthy():
     deadline = time.monotonic() + 40
     while time.monotonic() < deadline:
-        applied = False
         try:
             run('systemctl', 'is-active', '--quiet', *SERVICES)
             with urllib.request.urlopen('http://127.0.0.1:8090/library/api/files', timeout=3) as r:
@@ -177,6 +176,7 @@ def main():
                 shutil.copy2(root / name, dest)
         save_json(backup / 'manifest.json', manifest)
         print('Rollback directory:', backup, flush=True)
+        applied = False
         try:
             run('sudo', 'systemctl', 'stop', *SERVICES)
             if (root / 'project_hub.db').is_file():
