@@ -403,3 +403,8 @@ Desktop.ini
 *.db-wal
 *.db-shm
 *.db-journal
+
+# AI runtime configuration, credentials, and local results
+ai.env
+google-ai-service-account.json
+project-hub-ai-state/
