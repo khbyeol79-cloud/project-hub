@@ -216,3 +216,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Project Hub runtime data
+storage/
+logs/
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+
+# Google Drive credentials
+credentials.json
+token.json
