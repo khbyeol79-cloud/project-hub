@@ -7,6 +7,8 @@ from pathlib import Path
 import discord
 from dotenv import load_dotenv
 
+from database import init_db, insert_file, find_existing_file
+
 
 load_dotenv()
 
@@ -58,6 +60,8 @@ intents.message_content = True
 
 client = discord.Client(intents=intents)
 
+init_db()
+
 
 @client.event
 async def on_ready():
@@ -90,10 +94,8 @@ async def on_message(message):
     metadata_dir.mkdir(parents=True, exist_ok=True)
 
     for index, attachment in enumerate(message.attachments, start=1):
-
         try:
             timestamp = message.created_at.strftime("%Y%m%d_%H%M%S")
-
             original_filename = attachment.filename
 
             saved_filename = (
@@ -110,6 +112,11 @@ async def on_message(message):
             file_size = save_path.stat().st_size
             sha256 = calculate_sha256(save_path)
 
+            duplicate_info = find_existing_file(
+                original_filename,
+                sha256
+            )
+
             if message.guild:
                 discord_url = (
                     f"https://discord.com/channels/"
@@ -122,11 +129,13 @@ async def on_message(message):
 
             metadata = {
                 "discord_message_id": str(message.id),
+
                 "discord_guild_id": (
                     str(message.guild.id)
                     if message.guild
                     else None
                 ),
+
                 "discord_channel_id": str(message.channel.id),
                 "discord_channel": message.channel.name,
 
@@ -144,8 +153,14 @@ async def on_message(message):
                 "file_size_bytes": file_size,
                 "sha256": sha256,
 
+                "duplicate_of": duplicate_info["duplicate_of"],
+                "version_group": duplicate_info["version_group"],
+                "duplicate_type": duplicate_info["type"],
+
                 "discord_url": discord_url
             }
+
+            insert_file(metadata)
 
             metadata_filename = (
                 f"{timestamp}_{message.id}_{index}.json"
@@ -166,8 +181,16 @@ async def on_message(message):
                 )
 
             logger.info(
-                "FILE_SAVED | category=%s | channel=%s | "
-                "author=%s | file=%s | size=%d | sha256=%s | "
+                "FILE_SAVED | "
+                "category=%s | "
+                "channel=%s | "
+                "author=%s | "
+                "file=%s | "
+                "size=%d | "
+                "sha256=%s | "
+                "duplicate_type=%s | "
+                "duplicate_of=%s | "
+                "version_group=%s | "
                 "message_id=%s",
                 category,
                 message.channel.name,
@@ -175,13 +198,18 @@ async def on_message(message):
                 original_filename,
                 file_size,
                 sha256,
+                duplicate_info["type"],
+                duplicate_info["duplicate_of"],
+                duplicate_info["version_group"],
                 message.id
             )
 
         except Exception:
             logger.exception(
-                "FILE_SAVE_FAILED | channel=%s | "
-                "message_id=%s | file=%s",
+                "FILE_SAVE_FAILED | "
+                "channel=%s | "
+                "message_id=%s | "
+                "file=%s",
                 message.channel.name,
                 message.id,
                 attachment.filename
