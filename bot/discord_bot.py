@@ -30,14 +30,15 @@ LOG_DIR = BASE_DIR / "logs"
 CONFIG_PATH = BASE_DIR / "config" / "channels.json"
 logger = logging.getLogger("project-hub")
 CHANNEL_MAP = {}
+FORUM_MAP = {}
 drive_executor = None
 upload_worker = None
 collection_lock = asyncio.Lock()
 
 
-def load_channel_map():
+def load_channel_map(section="channels"):
     with CONFIG_PATH.open(encoding="utf-8") as stream:
-        channels = json.load(stream)["channels"]
+        channels = json.load(stream).get(section, {})
     if not isinstance(channels, dict) or any(
         not key.isdecimal() or category not in CATEGORY_FOLDERS
         for key, category in channels.items()
@@ -87,11 +88,11 @@ class CollectorClient(discord.Client):
         alert_channel = os.getenv("DISCORD_ALERT_CHANNEL_ID", "").strip()
         if alert_channel and (not alert_channel.isascii() or not alert_channel.isdecimal() or int(alert_channel) <= 0):
             raise ValueError("DISCORD_ALERT_CHANNEL_ID must be a positive channel ID or empty")
-        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message)
+        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message, forums=FORUM_MAP)
         self.history_collector.initialize()
         self.retry_task = asyncio.create_task(retry_uploads())
         self.history_task = asyncio.create_task(self.history_collector.run())
-        self.health_monitor = HealthMonitor(self, CHANNEL_MAP, alert_channel)
+        self.health_monitor = HealthMonitor(self, {**CHANNEL_MAP, **FORUM_MAP}, alert_channel)
         self.monitor_task = asyncio.create_task(self.health_monitor.run())
 
     async def close(self):
@@ -121,6 +122,7 @@ client = CollectorClient(intents=intents)
 @client.event
 async def on_ready():
     logger.info("Discord 로그인 완료 | bot=%s | 감지채널=%d", client.user, len(CHANNEL_MAP))
+    logger.info("FORUM_COLLECTION | forums=%d", len(FORUM_MAP))
     if client.history_collector:
         client.history_collector.wakeup.set()
 
@@ -128,6 +130,12 @@ async def on_ready():
 @client.event
 async def on_resumed():
     if client.history_collector:
+        client.history_collector.wakeup.set()
+
+
+@client.event
+async def on_thread_create(thread):
+    if str(thread.parent_id) in FORUM_MAP and client.history_collector:
         client.history_collector.wakeup.set()
 
 
@@ -155,6 +163,9 @@ async def collect_attachment(message, attachment, index, category):
         "discord_attachment_id": str(attachment.id),
         "discord_guild_id": str(message.guild.id) if message.guild else None,
         "discord_channel_id": channel_id,
+        "discord_parent_channel_id": (
+            str(message.channel.parent_id) if getattr(message.channel, "parent_id", None) else None
+        ),
         "discord_channel": getattr(message.channel, "name", channel_id),
         "discord_author_id": str(message.author.id),
         "discord_author": str(message.author),
@@ -181,13 +192,17 @@ async def collect_attachment(message, attachment, index, category):
 
 async def process_message(message, *, upload=True):
     channel_id = str(message.channel.id)
-    if message.author.bot or not message.attachments or channel_id not in CHANNEL_MAP:
+    parent_id = str(getattr(message.channel, "parent_id", ""))
+    category = CHANNEL_MAP.get(channel_id) or FORUM_MAP.get(parent_id)
+    if message.author.bot or not message.attachments or category is None:
         return True
     complete = True
     for index, attachment in enumerate(message.attachments, start=1):
         try:
             async with collection_lock:
-                file_id, created = await collect_attachment(message, attachment, index, CHANNEL_MAP[channel_id])
+                if parent_id in FORUM_MAP:
+                    database.initialize_channel_cursor(channel_id, 0)
+                file_id, created = await collect_attachment(message, attachment, index, category)
             if created and upload:
                 await run_upload(file_id)
             elif not created:
@@ -210,12 +225,13 @@ async def on_message(message):
 
 
 def main():
-    global CHANNEL_MAP, drive_executor, upload_worker
+    global CHANNEL_MAP, FORUM_MAP, drive_executor, upload_worker
     load_dotenv(BASE_DIR / ".env")
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN을 환경변수 또는 로컬 .env에 설정하세요.")
     CHANNEL_MAP = load_channel_map()
+    FORUM_MAP = load_channel_map("forums")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,

@@ -56,6 +56,7 @@ def init_db():
 
     columns = {row[1] for row in cursor.execute("PRAGMA table_info(files)")}
     additions = {
+        "discord_parent_channel_id": "TEXT",
         "discord_attachment_id": "TEXT",
         "upload_status": "TEXT NOT NULL DEFAULT 'pending'",
         "upload_attempts": "INTEGER NOT NULL DEFAULT 0",
@@ -194,9 +195,10 @@ def insert_file(metadata):
             duplicate_type,
             discord_url,
             discord_attachment_id,
-            metadata_path
+            metadata_path,
+            discord_parent_channel_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         metadata["discord_message_id"],
         metadata["discord_guild_id"],
@@ -216,7 +218,8 @@ def insert_file(metadata):
         metadata["duplicate_type"],
         metadata["discord_url"],
         metadata.get("discord_attachment_id"),
-        metadata.get("metadata_path")
+        metadata.get("metadata_path"),
+        metadata.get("discord_parent_channel_id")
     ))
 
     file_id = cursor.lastrowid
@@ -359,7 +362,8 @@ def health_snapshot(channel_map):
         channels = []
         for channel_id, category in channel_map.items():
             row = conn.execute("""SELECT COUNT(*) AS collected, MAX(created_at) AS last_collected_at
-                FROM files WHERE discord_channel_id = ?""", (str(channel_id),)).fetchone()
+                FROM files WHERE discord_channel_id = ? OR discord_parent_channel_id = ?""",
+                (str(channel_id), str(channel_id))).fetchone()
             channels.append(dict(row, channel_id=str(channel_id), category=category,
                                  history=checks.get("history:" + str(channel_id))))
         return {"totals": totals, "upload_alarm_count": alarm_count, "checks": checks, "channels": channels}

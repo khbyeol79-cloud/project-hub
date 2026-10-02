@@ -20,14 +20,11 @@ SCOPES = [
 
 
 CATEGORY_FOLDERS = {
-    "common": "00_공통",
-    "plc": "01_PLC",
-    "robot": "02_Robot",
-    "vision": "03_Vision",
-    "3d_model": "04_3D_Model",
-    "arduino": "05_Arduino",
-    "meeting": "06_회의자료",
-    "final": "99_최종자료"
+    "common": "hello⭐",
+    "3d_model": "기구제작🎨",
+    "vision": "pc💻",
+    "plc": "plc🛠️",
+    "meeting": "게시물",
 }
 
 ROOT_FOLDER_NAME = "Project Hub"

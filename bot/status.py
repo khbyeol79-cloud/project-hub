@@ -4,8 +4,10 @@ import json
 
 if __package__:
     from . import database
+    from .drive import CATEGORY_FOLDERS
 else:
     import database
+    from drive import CATEGORY_FOLDERS
 
 
 def format_status(snapshot):
@@ -16,7 +18,7 @@ def format_status(snapshot):
     for item in snapshot["channels"]:
         history = item["history"] or {}
         lines.extend([
-            f"채널 {item['channel_id']} ({item['category']}): 수집 {item['collected']}건",
+            f"채널 {item['channel_id']} ({CATEGORY_FOLDERS.get(item['category'], item['category'])}): 수집 {item['collected']}건",
             f"  마지막 로컬 기록: {item['last_collected_at'] or '없음'}",
             f"  마지막 이력 확인: {history.get('last_checked_at') or '아직 확인 전'} / 연속 실패 {history.get('failures', 0)}회",
         ])
@@ -29,7 +31,8 @@ def main():
     args = parser.parse_args()
     if not database.DB_PATH.is_file():
         parser.error("수집 DB가 없습니다. 봇을 먼저 실행하세요.")
-    channel_map = json.loads((database.BASE_DIR / "config/channels.json").read_text(encoding="utf-8"))["channels"]
+    config = json.loads((database.BASE_DIR / "config/channels.json").read_text(encoding="utf-8"))
+    channel_map = {**config["channels"], **config.get("forums", {})}
     snapshot = database.health_snapshot(channel_map)
     print(json.dumps(snapshot, ensure_ascii=False, indent=2) if args.json else format_status(snapshot))
 

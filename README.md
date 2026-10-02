@@ -18,7 +18,7 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 
 - `.env.example`을 `.env`로 복사한 후 `DISCORD_BOT_TOKEN`을 로컬에서 입력합니다. 기존 `.env`는 덮어쓰지 마세요. 환경변수가 있으면 해당 값을 우선합니다.
 - Google OAuth 데스크톱 앱의 `credentials.json`을 저장소 루트에 둡니다. 첫 실행 때 브라우저 인증 후 `token.json`이 생성됩니다.
-- `config/channels.json`의 `channels`에 Discord 채널 ID와 카테고리를 지정합니다. 지원 카테고리: `common`, `plc`, `robot`, `vision`, `3d_model`, `arduino`, `meeting`, `final`.
+- `config/channels.json`의 `channels`에는 일반 채팅, `forums`에는 포럼 ID와 카테고리를 지정합니다. 현재 Drive 폴더는 `hello⭐`, `기구제작🎨`, `pc💻`, `plc🛠️`, `게시물`입니다. 기존 기록과의 호환성을 위해 내부 키 `common`, `3d_model`, `vision`, `plc`, `meeting`은 유지합니다.
 - Discord 개발자 설정에서 Message Content Intent를 켜고 봇에 수집 채널 열람 권한을 부여합니다.
 - `.env`, `credentials.json`, `token.json`, `.venv`, 수집 파일, 로그, SQLite DB는 로컬 전용이며 Git에서 제외됩니다.
 
@@ -43,7 +43,21 @@ Discord 메시지 ID와 첨부파일 ID 조합으로 같은 첨부를 다시 수
 - 로컬 파일과 DB에 기록되면 메시지 확인은 완료입니다. Drive 업로드는 기존 재시도 대기열에서 별도로 처리합니다.
 - 봇에는 **채널 보기(View Channel)** 및 **메시지 기록 보기(Read Message History)** 권한과 Message Content Intent가 필요합니다. 권한 오류는 `HISTORY_SCAN_FAILED`, 파일 저장 오류로 멈춘 위치는 `HISTORY_MESSAGE_BLOCKED`로 기록합니다.
 
-삭제된 메시지·첨부파일과 이미 확인한 과거 메시지를 편집해서 나중에 추가한 첨부는 복구하지 않습니다. 수집 대상은 `config/channels.json`에 명시된 채널이며, 스레드와 포럼을 자동 탐색하지 않습니다. 최초 적용 전에 기존 DB를 백업하고, 운영 중인 봇 한 곳에만 갱신하세요.
+삭제된 메시지·첨부파일과 이미 확인한 과거 메시지를 편집해서 나중에 추가한 첨부는 복구하지 않습니다. 최초 적용 전에 기존 DB를 백업하고, 운영 중인 봇 한 곳에만 갱신하세요.
+
+`forums`에 등록한 포럼은 접근 가능한 활성·보관 게시글을 모두 탐색합니다. 게시글별 확인 위치를 따로 저장하고 처음 발견한 게시글은 처음 메시지부터 확인합니다. 각 게시글에서 한 번에 최대 100개 메시지를 읽고 다음 주기에 이어갑니다. 실시간으로 먼저 받은 첨부도 이 확인 위치를 앞당기지 않습니다. 보관된 게시글이 많으면 Discord 요청 제한에 따라 전체 확인이 오래 걸릴 수 있습니다. 설정하지 않은 포럼, 일반 채팅의 하위 스레드, 음성 채널은 수집하지 않습니다. 포럼 이름으로 업로드와 상태 집계를 묶으며 원래 게시글·메시지 링크는 기록에 보존합니다.
+
+현재 채널 연결:
+
+| Discord 채널 | Drive 폴더 | 종류 |
+| --- | --- | --- |
+| hello⭐ | hello⭐ | 일반 채팅 |
+| 기구제작🎨 | 기구제작🎨 | 일반 채팅 |
+| pc💻 | pc💻 | 일반 채팅 |
+| plc🛠️ | plc🛠️ | 일반 채팅 |
+| 게시물 | 게시물 | 포럼 게시글 |
+
+기존 Drive 폴더의 이름을 바꾸어 파일 ID와 링크를 유지합니다. 사용하지 않는 옛 분류는 `Project Hub/_이전 분류`에 보존합니다. 이 이름 연결은 현재 서버 구성 기준이며, 이후 Discord 채널명을 바꾸면 Drive 이름과 코드 설정도 함께 갱신해야 합니다.
 
 구현 참고: [discord.py 메시지 이력 API](https://discordpy.readthedocs.io/en/stable/api.html#discord.TextChannel.history).
 
