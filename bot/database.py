@@ -60,6 +60,7 @@ def find_existing_file(original_filename, sha256):
     conn = get_connection()
     cursor = conn.cursor()
 
+    # 내용이 완전히 같은 파일 확인
     cursor.execute("""
         SELECT
             id,
@@ -87,6 +88,7 @@ def find_existing_file(original_filename, sha256):
             )
         }
 
+    # 파일명은 같지만 내용이 다른 경우
     cursor.execute("""
         SELECT
             id,
@@ -114,6 +116,7 @@ def find_existing_file(original_filename, sha256):
             )
         }
 
+    # 완전히 새로운 파일
     return {
         "type": "new_file",
         "duplicate_of": None,
@@ -164,6 +167,34 @@ def insert_file(metadata):
         metadata["version_group"],
         metadata["duplicate_type"],
         metadata["discord_url"]
+    ))
+
+    file_id = cursor.lastrowid
+
+    conn.commit()
+    conn.close()
+
+    return file_id
+
+
+def update_drive_info(
+    file_id,
+    drive_file_id,
+    drive_url
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE files
+        SET
+            google_drive_file_id = ?,
+            google_drive_url = ?
+        WHERE id = ?
+    """, (
+        drive_file_id,
+        drive_url,
+        file_id
     ))
 
     conn.commit()
