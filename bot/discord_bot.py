@@ -1,5 +1,7 @@
 import os
 import json
+import logging
+from datetime import datetime
 from pathlib import Path
 
 import discord
@@ -12,7 +14,24 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = BASE_DIR / "storage"
+LOG_DIR = BASE_DIR / "logs"
 CONFIG_PATH = BASE_DIR / "config" / "channels.json"
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.FileHandler(
+            LOG_DIR / "project-hub.log",
+            encoding="utf-8"
+        ),
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger("project-hub")
 
 
 def load_channel_map():
@@ -32,8 +51,11 @@ client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
-    print(f"로그인 완료: {client.user}")
-    print(f"감지 채널 수: {len(CHANNEL_MAP)}")
+    logger.info(
+        "Discord 로그인 완료 | bot=%s | 감지채널=%d",
+        client.user,
+        len(CHANNEL_MAP)
+    )
 
 
 @client.event
@@ -54,22 +76,44 @@ async def on_message(message):
     save_dir = STORAGE_DIR / category
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    for attachment in message.attachments:
-        save_path = save_dir / attachment.filename
+    for index, attachment in enumerate(message.attachments, start=1):
+        try:
+            timestamp = message.created_at.strftime("%Y%m%d_%H%M%S")
 
-        await attachment.save(save_path)
+            original_filename = attachment.filename
 
-        print("----- 파일 저장 완료 -----")
-        print(f"카테고리: {category}")
-        print(f"채널: {message.channel.name}")
-        print(f"채널 ID: {message.channel.id}")
-        print(f"작성자: {message.author}")
-        print(f"작성자 ID: {message.author.id}")
-        print(f"파일명: {attachment.filename}")
-        print(f"저장경로: {save_path}")
-        print(f"메시지 ID: {message.id}")
-        print(f"업로드 시간: {message.created_at}")
-        print("--------------------------")
+            safe_filename = (
+                f"{timestamp}_"
+                f"{message.id}_"
+                f"{index}_"
+                f"{original_filename}"
+            )
+
+            save_path = save_dir / safe_filename
+
+            await attachment.save(save_path)
+
+            logger.info(
+                "FILE_SAVED | category=%s | channel=%s | channel_id=%s | "
+                "author=%s | author_id=%s | original=%s | saved=%s | "
+                "message_id=%s",
+                category,
+                message.channel.name,
+                message.channel.id,
+                message.author,
+                message.author.id,
+                original_filename,
+                save_path,
+                message.id
+            )
+
+        except Exception:
+            logger.exception(
+                "FILE_SAVE_FAILED | channel=%s | message_id=%s | file=%s",
+                message.channel.name,
+                message.id,
+                attachment.filename
+            )
 
 
 if not TOKEN:
