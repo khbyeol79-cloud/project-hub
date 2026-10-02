@@ -1,10 +1,12 @@
 from pathlib import Path
+import hashlib
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -31,7 +33,7 @@ CATEGORY_FOLDERS = {
 ROOT_FOLDER_NAME = "Project Hub"
 
 
-def get_drive_service():
+def get_drive_service(interactive=True):
     creds = None
 
     if TOKEN_PATH.exists():
@@ -46,6 +48,8 @@ def get_drive_service():
             creds.refresh(Request())
 
         else:
+            if not interactive:
+                raise RuntimeError("Google OAuth login required; run bot/drive.py locally")
             flow = InstalledAppFlow.from_client_secrets_file(
                 CREDENTIALS_PATH,
                 SCOPES
@@ -169,9 +173,21 @@ def upload_file(
     service,
     file_path,
     category,
-    drive_filename=None
+    drive_filename=None,
+    file_id=None,
+    expected_sha256=None
 ):
     file_path = Path(file_path)
+
+    if file_id:
+        existing = find_uploaded_file(service, file_id, expected_sha256)
+        if existing:
+            return existing
+
+    if expected_sha256:
+        with file_path.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != expected_sha256:
+                raise ValueError("Local file changed since collection")
 
     if not file_path.exists():
         raise FileNotFoundError(
@@ -201,16 +217,31 @@ def upload_file(
         ]
     }
 
+    if file_id:
+        metadata["id"] = file_id
+    if expected_sha256:
+        metadata["appProperties"] = {"sha256": expected_sha256}
+
     media = MediaFileUpload(
         str(file_path),
         resumable=True
     )
 
-    uploaded = service.files().create(
-        body=metadata,
-        media_body=media,
-        fields="id, name, webViewLink"
-    ).execute()
+    try:
+        uploaded = service.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id, name, webViewLink"
+        ).execute()
+    except HttpError as exc:
+        if exc.resp.status != 409 or not file_id:
+            raise
+        existing = find_uploaded_file(service, file_id, expected_sha256)
+        if not existing:
+            raise
+        return existing
+    finally:
+        media.stream().close()
 
     return {
         "file_id": uploaded["id"],
@@ -219,6 +250,26 @@ def upload_file(
             "webViewLink"
         )
     }
+
+
+def generate_file_id(service):
+    return service.files().generateIds(count=1, space="drive", type="files").execute()["ids"][0]
+
+
+def find_uploaded_file(service, file_id, expected_sha256=None):
+    try:
+        item = service.files().get(
+            fileId=file_id, fields="id,name,webViewLink,trashed,appProperties"
+        ).execute()
+    except HttpError as exc:
+        if exc.resp.status == 404:
+            return None
+        raise
+    if item.get("trashed"):
+        raise ValueError("Reserved Drive file is in trash; manual review required")
+    if expected_sha256 and item.get("appProperties", {}).get("sha256") != expected_sha256:
+        raise ValueError("Reserved Drive file hash does not match")
+    return {"file_id": item["id"], "name": item["name"], "url": item.get("webViewLink")}
 
 
 if __name__ == "__main__":

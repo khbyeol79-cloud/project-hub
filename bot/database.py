@@ -1,4 +1,6 @@
 import sqlite3
+import time
+from contextlib import closing
 from pathlib import Path
 
 
@@ -51,6 +53,31 @@ def init_db():
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(files)")}
+    additions = {
+        "discord_attachment_id": "TEXT",
+        "upload_status": "TEXT NOT NULL DEFAULT 'pending'",
+        "upload_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "next_retry_at": "REAL NOT NULL DEFAULT 0",
+        "last_upload_error": "TEXT",
+        "planned_drive_id": "TEXT",
+        "metadata_path": "TEXT",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            cursor.execute(f"ALTER TABLE files ADD COLUMN {name} {definition}")
+    if "upload_status" not in columns:
+        # Old failed uploads had no stable remote ID. Do not blindly re-upload them.
+        cursor.execute("""
+            UPDATE files SET upload_status = CASE
+                WHEN google_drive_file_id IS NOT NULL THEN 'uploaded'
+                ELSE 'needs_review' END
+        """)
+    cursor.execute("""CREATE UNIQUE INDEX IF NOT EXISTS unique_discord_attachment
+        ON files(discord_message_id, discord_attachment_id)
+        WHERE discord_attachment_id IS NOT NULL""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS upload_queue ON files(upload_status, next_retry_at)")
 
     conn.commit()
     conn.close()
@@ -146,9 +173,11 @@ def insert_file(metadata):
             duplicate_of,
             version_group,
             duplicate_type,
-            discord_url
+            discord_url,
+            discord_attachment_id,
+            metadata_path
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         metadata["discord_message_id"],
         metadata["discord_guild_id"],
@@ -166,7 +195,9 @@ def insert_file(metadata):
         metadata["duplicate_of"],
         metadata["version_group"],
         metadata["duplicate_type"],
-        metadata["discord_url"]
+        metadata["discord_url"],
+        metadata.get("discord_attachment_id"),
+        metadata.get("metadata_path")
     ))
 
     file_id = cursor.lastrowid
@@ -189,7 +220,10 @@ def update_drive_info(
         UPDATE files
         SET
             google_drive_file_id = ?,
-            google_drive_url = ?
+            google_drive_url = ?,
+            upload_status = 'uploaded',
+            next_retry_at = 0,
+            last_upload_error = NULL
         WHERE id = ?
     """, (
         drive_file_id,
@@ -199,3 +233,56 @@ def update_drive_info(
 
     conn.commit()
     conn.close()
+
+
+def get_file(file_id):
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM files WHERE id = ?", (file_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def find_attachment(message_id, attachment_id, legacy_prefix):
+    with closing(get_connection()) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("""SELECT * FROM files
+            WHERE discord_message_id = ? AND discord_attachment_id = ?""",
+            (message_id, attachment_id)).fetchone()
+        if row is None:
+            # Adopt pre-migration records without downloading or uploading again.
+            row = conn.execute("""SELECT * FROM files
+                WHERE discord_message_id = ? AND discord_attachment_id IS NULL
+                  AND substr(saved_filename, 1, ?) = ?
+                ORDER BY google_drive_file_id IS NULL, id LIMIT 1""",
+                (message_id, len(legacy_prefix), legacy_prefix)).fetchone()
+            if row:
+                conn.execute("UPDATE files SET discord_attachment_id = ? WHERE id = ?",
+                             (attachment_id, row["id"]))
+        return dict(row) if row else None
+
+
+def reserve_drive_id(file_id, candidate):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("UPDATE files SET planned_drive_id = COALESCE(planned_drive_id, ?) WHERE id = ?",
+                     (candidate, file_id))
+        return conn.execute("SELECT planned_drive_id FROM files WHERE id = ?", (file_id,)).fetchone()[0]
+
+
+def due_uploads(now=None, limit=50):
+    with closing(get_connection()) as conn:
+        return [row[0] for row in conn.execute("""SELECT id FROM files
+            WHERE upload_status IN ('pending', 'failed') AND next_retry_at <= ?
+            ORDER BY next_retry_at, id LIMIT ?""", (time.time() if now is None else now, limit))]
+
+
+def mark_upload_attempt(file_id):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("UPDATE files SET upload_attempts = upload_attempts + 1 WHERE id = ?", (file_id,))
+
+
+def mark_upload_failed(file_id, error, now=None):
+    with closing(get_connection()) as conn, conn:
+        attempts = conn.execute("SELECT upload_attempts FROM files WHERE id = ?", (file_id,)).fetchone()[0]
+        delay = min(3600, 30 * 2 ** min(max(attempts - 1, 0), 7))
+        conn.execute("""UPDATE files SET upload_status = 'failed', last_upload_error = ?,
+            next_retry_at = ? WHERE id = ?""", (error, (time.time() if now is None else now) + delay, file_id))

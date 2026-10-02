@@ -398,3 +398,8 @@ Desktop.ini
 #
 # 대신 아래 파일을 GitHub에 올리는 방식:
 # config/channels.example.json
+# Track the shared Python target; keep SQLite sidecars local.
+!.python-version
+*.db-wal
+*.db-shm
+*.db-journal
