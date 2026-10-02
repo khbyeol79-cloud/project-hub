@@ -36,6 +36,7 @@ class LibraryTests(unittest.TestCase):
                 INSERT INTO content_locations VALUES(1,1,'page one');''')
             db.execute('INSERT INTO files VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                        (1,'sample.txt','PLC','123','plc','2026-10-02',6,1,None,'hash',str(self.storage/'sample.txt')))
+            db.execute('ALTER TABLE files ADD COLUMN google_drive_file_id TEXT')
         self.ai=Mock()
         self.ai.settings=SimpleNamespace(enabled=True,max_chars=12000,daily_limit=20,monthly_limit=300)
         self.ai.run.return_value={'answer':'Friday [S1]','sources':[{'id':'S1','page':1}],'partial':False,'cached':False}
@@ -65,6 +66,12 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(anon.get('/library/api/files').status_code,200)
         self.assertEqual(anon.get('/library/api/share-link').json['url'],'https://example.test/library/')
         self.assertEqual(anon.post('/library/api/files/1/ai',json={'task':'summary'}).status_code,403)
+
+    def test_drive_link_requires_valid_uploaded_id(self):
+        for drive_id,expected in [(None,None),('file_123','https://drive.google.com/file/d/file_123/view'),('https://other.test/',None)]:
+            with closing(sqlite3.connect(self.db)) as db, db:
+                db.execute('UPDATE files SET google_drive_file_id=? WHERE id=1',(drive_id,))
+            self.assertEqual(self.client.get('/library/api/files/1').json['drive_url'],expected)
 
     def put_file(self,name,body):
         p=self.storage/name

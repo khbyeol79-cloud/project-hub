@@ -5,6 +5,7 @@ from datetime import timedelta
 import hashlib
 import hmac
 import os
+import re
 from pathlib import Path
 import sqlite3
 import threading
@@ -165,6 +166,8 @@ def create_app(config=None, ai=None):
             db.execute('BEGIN')
             row = file_row(db, file_id)
             row.pop('local_path')
+            drive_id=db.execute('SELECT google_drive_file_id FROM files WHERE id=?',(file_id,)).fetchone()[0]
+            row['drive_url']=f'https://drive.google.com/file/d/{drive_id}/view' if isinstance(drive_id,str) and re.fullmatch(r'[A-Za-z0-9_-]+',drive_id) else None
             pages, size, truncated = [], 0, False
             if row['content_status'] in {'indexed', 'partial'}:
                 for p in db.execute('''SELECT p.page, p.body, l.label FROM content_pages p
