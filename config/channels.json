@@ -1,0 +1,11 @@
+{
+  "channels": {
+    "PLC_CHANNEL_ID": "plc",
+    "ROBOT_CHANNEL_ID": "robot",
+    "VISION_CHANNEL_ID": "vision",
+    "MODEL_CHANNEL_ID": "3d_model",
+    "ARDUINO_CHANNEL_ID": "arduino",
+    "MEETING_CHANNEL_ID": "meeting",
+    "COMMON_CHANNEL_ID": "common"
+  }
+}
