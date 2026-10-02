@@ -15,10 +15,12 @@ if __package__:
     from . import database
     from .drive import CATEGORY_FOLDERS
     from .upload_queue import UploadWorker, write_metadata
+    from .history import HistoryCollector
 else:
     import database
     from drive import CATEGORY_FOLDERS
     from upload_queue import UploadWorker, write_metadata
+    from history import HistoryCollector
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = BASE_DIR / "storage"
@@ -72,11 +74,21 @@ async def retry_uploads():
 
 class CollectorClient(discord.Client):
     retry_task = None
+    history_task = None
+    history_collector = None
 
     async def setup_hook(self):
+        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message)
+        self.history_collector.initialize()
         self.retry_task = asyncio.create_task(retry_uploads())
+        self.history_task = asyncio.create_task(self.history_collector.run())
 
     async def close(self):
+        if self.history_task:
+            self.history_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.history_task
+            self.history_task = None
         if self.retry_task:
             self.retry_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -93,6 +105,14 @@ client = CollectorClient(intents=intents)
 @client.event
 async def on_ready():
     logger.info("Discord 로그인 완료 | bot=%s | 감지채널=%d", client.user, len(CHANNEL_MAP))
+    if client.history_collector:
+        client.history_collector.wakeup.set()
+
+
+@client.event
+async def on_resumed():
+    if client.history_collector:
+        client.history_collector.wakeup.set()
 
 
 async def collect_attachment(message, attachment, index, category):
@@ -143,22 +163,29 @@ async def collect_attachment(message, attachment, index, category):
     return file_id, True
 
 
-@client.event
-async def on_message(message):
+async def process_message(message, *, upload=True):
     channel_id = str(message.channel.id)
     if message.author.bot or not message.attachments or channel_id not in CHANNEL_MAP:
-        return
+        return True
+    complete = True
     for index, attachment in enumerate(message.attachments, start=1):
         try:
             async with collection_lock:
                 file_id, created = await collect_attachment(message, attachment, index, CHANNEL_MAP[channel_id])
-            if created:
+            if created and upload:
                 await run_upload(file_id)
-            else:
+            elif not created:
                 logger.info("ATTACHMENT_ALREADY_RECORDED | file_id=%s", file_id)
         except Exception as exc:
+            complete = False
             logger.error("FILE_PROCESS_FAILED | channel=%s | message_id=%s | error=%s",
                          channel_id, message.id, type(exc).__name__)
+    return complete
+
+
+@client.event
+async def on_message(message):
+    await process_message(message)
 
 
 def main():

@@ -78,6 +78,11 @@ def init_db():
         ON files(discord_message_id, discord_attachment_id)
         WHERE discord_attachment_id IS NOT NULL""")
     cursor.execute("CREATE INDEX IF NOT EXISTS upload_queue ON files(upload_status, next_retry_at)")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS channel_cursors (
+        channel_id TEXT PRIMARY KEY,
+        last_message_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""")
 
     conn.commit()
     conn.close()
@@ -286,3 +291,30 @@ def mark_upload_failed(file_id, error, now=None):
         delay = min(3600, 30 * 2 ** min(max(attempts - 1, 0), 7))
         conn.execute("""UPDATE files SET upload_status = 'failed', last_upload_error = ?,
             next_retry_at = ? WHERE id = ?""", (error, (time.time() if now is None else now) + delay, file_id))
+
+
+def initialize_channel_cursor(channel_id, fallback_id):
+    """Freeze the initial boundary before live events can insert newer records."""
+    with closing(get_connection()) as conn, conn:
+        latest = conn.execute("""SELECT MAX(CAST(discord_message_id AS INTEGER))
+            FROM files WHERE discord_channel_id = ?""", (str(channel_id),)).fetchone()[0]
+        # Include the last stored message: it may contain a partially saved batch.
+        initial = max(0, latest - 1) if latest else int(fallback_id)
+        conn.execute("INSERT OR IGNORE INTO channel_cursors(channel_id, last_message_id) VALUES (?, ?)",
+                     (str(channel_id), str(initial)))
+
+
+def get_channel_cursor(channel_id):
+    with closing(get_connection()) as conn:
+        row = conn.execute("SELECT last_message_id FROM channel_cursors WHERE channel_id = ?",
+                           (str(channel_id),)).fetchone()
+        return int(row[0]) if row else None
+
+
+def advance_channel_cursor(channel_id, message_id):
+    """Only the ordered history scan advances this boundary, never live events."""
+    with closing(get_connection()) as conn, conn:
+        conn.execute("""UPDATE channel_cursors
+            SET last_message_id = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE channel_id = ? AND CAST(last_message_id AS INTEGER) < ?""",
+            (str(message_id), str(channel_id), int(message_id)))
