@@ -408,3 +408,5 @@ Desktop.ini
 ai.env
 google-ai-service-account.json
 project-hub-ai-state/
+library.env
+library-share-url.txt

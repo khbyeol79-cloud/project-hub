@@ -1,0 +1,44 @@
+Project Hub 모바일 자료실
+
+실행 환경: Python 3.11, requirements-web.txt. 웹 서비스는 별도 가상환경으로 실행합니다.
+기능: 파일명/본문 검색, 채널 필터, 추출된 본문 열람, 원본 다운로드,
+선택한 문서의 AI 요약·질문, 출처 구간 이동, 공유 링크 복사.
+파일 변환/색인은 수집 봇의 기존 content_* 테이블을 읽으며 수정하지 않습니다.
+본문이 준비되지 않은 파일은 다운로드만 가능합니다. 전체 이미지/PPT 변환 뷰어는
+이번 범위에 포함되지 않습니다. 일반 대화 수집과 여러 문서를 합친 질문도 별도 작업입니다.
+
+접근 방식
+- 사용자가 받은 https://도메인/library/#key=... 링크로 접속하면 자동으로 세션을 얻습니다.
+- 링크 소지자는 모든 수집 자료 열람·다운로드·AI 질문·재공유가 가능합니다.
+- 별도 계정, 로그인 폼, OTP가 없습니다. Discord 채널별 사용자 권한도 적용하지 않습니다.
+- 링크 없는 사용자는 자료/본문/다운로드/API에 접근할 수 없습니다. 공개되는 것은 빈 UI뿐입니다.
+- 토큰은 URL fragment에서 읽어 POST로 교환한 뒤 주소창에서 제거합니다. 서버 접근 로그에
+  토큰 URL을 남기지 않으며 Referrer-Policy=no-referrer, noindex, no-store를 설정합니다.
+- 공유는 화면의 '공유 링크 복사'를 사용합니다. 주소창에는 토큰이 남지 않습니다.
+- 세션 쿠키는 Secure/HttpOnly/SameSite=Strict, /library/ 경로, 14일 유효입니다.
+- POST는 설정된 HTTPS origin과 JSON/사용자 정의 헤더를 검사합니다.
+- 자료실은 127.0.0.1:8090에서만 수신합니다. Caddy가 /library 및 /library/*만 연결하고,
+  기존 code-server 경로는 Authelia 2단계 인증을 계속 거칩니다.
+- AI 한도는 모든 링크 사용자가 공유합니다. 기본 하루 20회, 월 300회이며 계정 전체 과금
+  상한은 아닙니다. AI는 서버에서 한 번에 하나만 실행하고 다른 요청은 대기 안내를 반환합니다.
+
+Pi 설정 (khb 사용자)
+  python -m organizer.share --origin https://khbps.duckdns.org
+설정: ~/.config/project-hub/library.env (600)
+공유 주소: ~/.config/project-hub/library-share-url.txt (600)
+키, 설정, 공유 주소, AI 결과 DB는 Git에 넣지 않습니다.
+venv311 준비 후 sudo python3 /home/khb/project-hub/organizer/install_web.py 로 설치합니다.
+설치기는 Caddy 설정을 검증·백업하고 서비스 등록 및 /library 경로 연결을 수행합니다.
+설정이 예상과 다르면 변경하지 않으며, 시작/연결 실패 시 기존 상태로 복구합니다.
+서비스는 PC가 꺼져도 Pi에서 동작하며 Pi 재부팅 후 자동 시작합니다.
+
+링크 폐기·재발급
+  python -m organizer.share --origin https://khbps.duckdns.org --rotate
+  sudo systemctl restart project-hub-library.service
+재시작하면 이전 링크와 기존 세션이 모두 무효화됩니다. 새 URL만 다시 전달하세요.
+기존 링크는 --rotate 없이 덮어쓰지 않습니다.
+
+중지
+  sudo systemctl stop project-hub-library.service
+자동 재시작도 끄려면 disable을 사용합니다. Caddy 경로는 유지되며 자료는 노출되지 않습니다.
+운영 확인: systemctl is-active project-hub-library.service / journalctl -u project-hub-library.service
