@@ -72,6 +72,10 @@ def create_app(config=None, ai=None):
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        if request.endpoint == 'html_preview':
+            response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+        else:
+            response.headers['Content-Security-Policy'] += "; frame-src 'self' https://drive.google.com"
         return response
 
     @app.errorhandler(Exception)
@@ -168,6 +172,8 @@ def create_app(config=None, ai=None):
             row.pop('local_path')
             drive_id=db.execute('SELECT google_drive_file_id FROM files WHERE id=?',(file_id,)).fetchone()[0]
             row['drive_url']=f'https://drive.google.com/file/d/{drive_id}/view' if isinstance(drive_id,str) and re.fullmatch(r'[A-Za-z0-9_-]+',drive_id) else None
+            row['drive_preview_url']=row['drive_url'].removesuffix('/view')+'/preview' if row['drive_url'] else None
+            row['html_preview']=Path(row['original_filename']).suffix.lower() in {'.html','.htm'}
             pages, size, truncated = [], 0, False
             if row['content_status'] in {'indexed', 'partial'}:
                 for p in db.execute('''SELECT p.page, p.body, l.label FROM content_pages p
@@ -216,6 +222,25 @@ def create_app(config=None, ai=None):
         elif magic[:4]==b'RIFF' and magic[8:12]==b'WEBP': mime='image/webp'
         if mime is None: abort(404)
         return send_file(path,mimetype=mime)
+
+    @app.get('/library/files/<int:file_id>/html-preview')
+    def html_preview(file_id):
+        row,path=local_file(file_id)
+        if Path(row['original_filename']).suffix.lower() not in {'.html','.htm'}:
+            abort(404)
+        with path.open('rb') as f:
+            data=f.read(25*1024*1024+1)
+        if len(data)>25*1024*1024:
+            abort(413)
+        try:
+            if data.startswith((b'\xff\xfe',b'\xfe\xff')):
+                text=data.decode('utf-16')
+            else:
+                try: text=data.decode('utf-8-sig')
+                except UnicodeDecodeError: text=data.decode('cp949')
+        except UnicodeError:
+            abort(422)
+        return app.response_class(text,content_type='text/html; charset=utf-8')
 
     @app.get('/library/api/status')
     def status():

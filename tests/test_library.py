@@ -105,6 +105,23 @@ class LibraryTests(unittest.TestCase):
         result=extract(self.put_file('plan.html',body))
         self.assertEqual(result['pages'][0]['text'],'Plan\nFriday & Monday')
 
+    def test_html_preview_is_isolated_and_authenticated(self):
+        self.put_file('plan.html',b'<style>h1{color:red}</style><h1>Plan</h1><script>alert(1)</script>')
+        route='/library/files/1/html-preview'
+        self.assertEqual(self.app.test_client().get(route).status_code,401)
+        r=self.client.get(route)
+        self.assertEqual(r.status_code,200)
+        self.assertIn('<h1>Plan</h1>',r.text)
+        policy=r.headers['Content-Security-Policy']
+        for rule in ['sandbox;',"default-src 'none'","frame-ancestors 'self'","form-action 'none'"]:
+            self.assertIn(rule,policy)
+        self.assertNotIn('allow-scripts',policy)
+        self.put_file('not-html.txt',b'<h1>no</h1>')
+        self.assertEqual(self.client.get(route).status_code,404)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE files SET original_filename='escape.html',local_path=?",(str(self.db),))
+        self.assertEqual(self.client.get(route).status_code,404)
+
     def test_pptx_uses_presentation_order(self):
         out=io.BytesIO()
         with zipfile.ZipFile(out,'w') as z:
