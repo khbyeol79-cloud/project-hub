@@ -2,8 +2,7 @@ Project Hub AI 정리 프로그램 (Python 3.11)
 
 수집 봇과 별도로 실행하는 관리자용 프로그램입니다. 기존 검색 인덱스의 텍스트를
 읽기 전용으로 읽어 요약 또는 선택한 문서에 대한 질문을 처리합니다.
-Discord 명령이나 웹 공개 API는 아직 연결하지 않았습니다. 로그인/채널별 권한을
-검사하는 공개 진입점으로 이 CLI를 그대로 노출하지 마세요.
+모바일 웹 자료실 연결 및 접근 설정은 WEB.txt를 참고하세요. CLI 자체는 관리자용입니다.
 
 서버 설정
 1. ai.env.example을 ~/.config/project-hub/ai.env로 복사하고 프로젝트/키 경로를 설정합니다.
@@ -42,5 +41,5 @@ Word/Excel은 추출 구간 번호이며 실제 페이지/셀 위치라고 해�
 모델: gemini-3.1-flash-lite, global, MINIMAL thinking.
 공식 모델 정보: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-1-flash-lite
 요청 형식: https://docs.cloud.google.com/gemini-enterprise-agent-platform/reference/models/inference
-현재 구현은 관리자 로컬 실행용입니다. 다음 단계는 인증된 웹 자료실에서 채널 접근
-권한을 확인하고 사용자 요청에 따라 이 모듈을 호출하는 연결입니다.
+웹 자료실에서는 선택한 파일의 본문으로 요약·질문을 요청하며 같은 사용량 한도를 공유합니다.
+CLI는 기존 봇 색인을 사용하고 웹의 Markdown/HTML/PPTX 추가 색인은 웹에서 사용합니다.

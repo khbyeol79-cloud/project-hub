@@ -5,11 +5,14 @@ from types import SimpleNamespace
 import sqlite3
 import tempfile
 import unittest
+import io
+import zipfile
 from unittest.mock import Mock
 
 from organizer.web import create_app
 from organizer.share import configure
 from organizer.install_web import build_caddy, OLD, NEW
+from organizer.extract_extra import extract
 
 
 class LibraryTests(unittest.TestCase):
@@ -55,6 +58,60 @@ class LibraryTests(unittest.TestCase):
             self.assertEqual(anon.get(path).status_code,401,path)
             self.assertEqual(anon.get(path,headers={'Remote-User':'khb'}).status_code,401,path)
         self.assertEqual(self.client.get('/library/',headers=self.headers,environ_base={'REMOTE_ADDR':'192.168.0.5'}).status_code,403)
+
+    def test_public_mode_works_without_cookie_but_keeps_csrf(self):
+        self.app.config['PUBLIC_ACCESS']=True
+        anon=self.app.test_client()
+        self.assertEqual(anon.get('/library/api/files').status_code,200)
+        self.assertEqual(anon.get('/library/api/share-link').json['url'],'https://example.test/library/')
+        self.assertEqual(anon.post('/library/api/files/1/ai',json={'task':'summary'}).status_code,403)
+
+    def put_file(self,name,body):
+        p=self.storage/name
+        p.write_bytes(body)
+        sha=hashlib.sha256(body).hexdigest()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE files SET original_filename=?,local_path=?,sha256=? WHERE id=1',(name,str(p),sha))
+            db.execute("UPDATE content_documents SET status='unsupported'")
+        return {'path':str(p),'storage':str(self.storage),'filename':name,'sha256':sha}
+
+    def test_markdown_detail_search_and_ai_share_same_text(self):
+        text='# Meeting\n\nFriday inspection.\n<script>alert(1)</script>'
+        self.put_file('notes.md',text.encode())
+        before=self.db.read_bytes()
+        detail=self.client.get('/library/api/files/1').json
+        self.assertEqual(detail['pages'][0]['text'],text)
+        self.assertEqual(detail['content_status'],'indexed')
+        self.assertEqual(len(self.client.get('/library/api/files?q=inspection').json['files']),1)
+        r=self.client.post('/library/api/files/1/ai',json={'task':'summary'},headers=self.post_headers)
+        self.assertEqual(r.status_code,200)
+        self.assertEqual(self.ai.run.call_args.args[1][0]['text'],text)
+        self.assertEqual(self.db.read_bytes(),before)
+
+    def test_markdown_changed_hash_is_rejected(self):
+        job=self.put_file('notes.md',b'original')
+        Path(job['path']).write_bytes(b'changed')
+        self.assertEqual(extract(job)['status'],'changed')
+
+    def test_html_extracts_text_without_active_content(self):
+        body=b'<h1>Plan</h1><p>Friday &amp; Monday</p><script>steal()</script><style>secret</style><iframe src="https://evil.test">hidden</iframe>'
+        result=extract(self.put_file('plan.html',body))
+        self.assertEqual(result['pages'][0]['text'],'Plan\nFriday & Monday')
+
+    def test_pptx_uses_presentation_order(self):
+        out=io.BytesIO()
+        with zipfile.ZipFile(out,'w') as z:
+            z.writestr('ppt/presentation.xml','''<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId r:id="r2"/><p:sldId r:id="r1"/></p:sldIdLst></p:presentation>''')
+            z.writestr('ppt/_rels/presentation.xml.rels','<Relationships><Relationship Id="r1" Target="slides/slide1.xml"/><Relationship Id="r2" Target="slides/slide2.xml"/></Relationships>')
+            for number in (1,2):
+                z.writestr(f'ppt/slides/slide{number}.xml',f'<root xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:p><a:r><a:t>Slide {number}</a:t></a:r></a:p></root>')
+        result=extract(self.put_file('slides.pptx',out.getvalue()))
+        self.assertEqual([p['text'] for p in result['pages']],['Slide 2','Slide 1'])
+        self.assertEqual(result['pages'][0]['label'],'슬라이드 1')
+
+    def test_markup_cannot_be_served_as_image(self):
+        self.put_file('bad.png',b'<svg onload="alert(1)"></svg>')
+        self.assertEqual(self.client.get('/library/files/1/preview').status_code,404)
 
     def test_link_exchange_cookie_and_rotation(self):
         anon=self.app.test_client()

@@ -16,6 +16,7 @@ from werkzeug.exceptions import HTTPException
 
 from .ai import AIError, Organizer, Settings
 from .__main__ import read_document
+from .documents import Documents, SUFFIXES
 
 ROOT = Path(__file__).resolve().parent
 FIELDS = '''f.id, f.original_filename, f.discord_channel, f.discord_channel_id,
@@ -26,13 +27,17 @@ FIELDS = '''f.id, f.original_filename, f.discord_channel, f.discord_channel_id,
 def create_app(config=None, ai=None):
     app = Flask(__name__, static_folder=None)
     app.config.update(DB_PATH=ROOT.parent / 'project_hub.db', STORAGE=ROOT.parent / 'storage',
-                      SHARE_HASH='', PUBLIC_ORIGIN='', MAX_CONTENT_LENGTH=8192,
+                      SHARE_HASH='', PUBLIC_ORIGIN='', PUBLIC_ACCESS=False, MAX_CONTENT_LENGTH=8192,
+                      DOCUMENT_CACHE=None,
                       SHARE_URL_FILE=Path.home()/'.config/project-hub/library-share-url.txt',
                       SESSION_COOKIE_NAME='ph_library', SESSION_COOKIE_PATH='/library/',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SECURE=True,
                       SESSION_COOKIE_SAMESITE='Strict', PERMANENT_SESSION_LIFETIME=timedelta(days=14))
     if config:
         app.config.update(config)
+    documents=Documents(app.config['DB_PATH'],app.config['STORAGE'],
+                        app.config['DOCUMENT_CACHE'] or Path(app.config['DB_PATH']).parent/'library-text.db')
+    app.extensions['documents']=documents
     ai_lock = threading.Lock()
     access_lock = threading.Lock()
     access_attempts = deque()
@@ -51,6 +56,8 @@ def create_app(config=None, ai=None):
                     or request.headers.get('X-Requested-With') != 'ProjectHub' or not request.is_json):
                 abort(403)
         if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/api/access'}:
+            return
+        if app.config['PUBLIC_ACCESS']:
             return
         current = app.config['SHARE_HASH']
         saved = session.get('access', '')
@@ -122,11 +129,15 @@ def create_app(config=None, ai=None):
             abort(400)
         conditions, params = [], []
         if query:
-            conditions.append('''(instr(lower(f.original_filename),lower(?))>0 OR EXISTS
+            condition='''(instr(lower(f.original_filename),lower(?))>0 OR EXISTS
                 (SELECT 1 FROM content_pages p JOIN content_documents x ON x.file_id=p.file_id
                  WHERE p.file_id=f.id AND x.source_sha256=f.sha256 AND x.status IN ('indexed','partial')
-                 AND instr(p.search_body,?)>0))''')
+                 AND instr(p.search_body,?)>0)'''
             params.extend([query, query.casefold()])
+            for file_id,sha in documents.matches(query):
+                condition+=' OR (f.id=? AND f.sha256=?)'
+                params.extend([file_id,sha])
+            conditions.append(condition+')')
         if channel:
             conditions.append('f.discord_channel_id=?')
             params.append(channel)
@@ -135,7 +146,12 @@ def create_app(config=None, ai=None):
             rows = db.execute('SELECT ' + FIELDS + ' FROM files f LEFT JOIN content_documents d ON d.file_id=f.id'
                               + where + ' ORDER BY f.id DESC LIMIT 31 OFFSET ?', params + [offset]).fetchall()
             channels = [dict(r) for r in db.execute('SELECT DISTINCT discord_channel_id AS id, discord_channel AS name FROM files ORDER BY name')]
-        return jsonify(files=[dict(r) for r in rows[:30]], more=len(rows)>30, channels=channels)
+        items=[dict(r) for r in rows[:30]]
+        for item in items:
+            if Path(item['original_filename']).suffix.lower() in SUFFIXES:
+                extra=documents.get(item['id'])
+                if extra: item['content_status']=extra['status']
+        return jsonify(files=items, more=len(rows)>30, channels=channels)
 
     def file_row(db, file_id):
         row = db.execute('SELECT ' + FIELDS + ', f.local_path FROM files f LEFT JOIN content_documents d ON d.file_id=f.id WHERE f.id=?', (file_id,)).fetchone()
@@ -162,10 +178,13 @@ def create_app(config=None, ai=None):
                     pages.append({'page': p['page'], 'label': p['label'] or f"추출 구간 {p['page']}", 'text': text})
                     size += len(text)
             row.update(pages=pages, partial=truncated or row['content_status']=='partial')
+            extra=documents.get(file_id)
+            if extra:
+                row.update(pages=extra['pages'],partial=extra['status']=='partial',content_status=extra['status'])
+            row['image_preview']=Path(row['original_filename']).suffix.lower() in {'.png','.jpg','.jpeg','.gif','.webp'}
             return jsonify(row)
 
-    @app.get('/library/files/<int:file_id>/download')
-    def download(file_id):
+    def local_file(file_id):
         with closing(connect()) as db:
             row = file_row(db, file_id)
         path = Path(row['local_path'])
@@ -175,8 +194,25 @@ def create_app(config=None, ai=None):
         storage = Path(app.config['STORAGE']).resolve()
         if not path.is_relative_to(storage) or not path.is_file():
             abort(404)
+        return row,path
+
+    @app.get('/library/files/<int:file_id>/download')
+    def download(file_id):
+        row,path=local_file(file_id)
         # Never render arbitrary collected HTML/SVG under the authenticated origin.
         return send_file(path, as_attachment=True, download_name=row['original_filename'], mimetype='application/octet-stream')
+
+    @app.get('/library/files/<int:file_id>/preview')
+    def preview(file_id):
+        row,path=local_file(file_id)
+        with path.open('rb') as f: magic=f.read(16)
+        mime=None
+        if magic.startswith(b'\x89PNG\r\n\x1a\n'): mime='image/png'
+        elif magic.startswith(b'\xff\xd8\xff'): mime='image/jpeg'
+        elif magic[:6] in {b'GIF87a',b'GIF89a'}: mime='image/gif'
+        elif magic[:4]==b'RIFF' and magic[8:12]==b'WEBP': mime='image/webp'
+        if mime is None: abort(404)
+        return send_file(path,mimetype=mime)
 
     @app.get('/library/api/status')
     def status():
@@ -187,6 +223,8 @@ def create_app(config=None, ai=None):
 
     @app.get('/library/api/share-link')
     def share_link():
+        if app.config['PUBLIC_ACCESS']:
+            return jsonify(url=app.config['PUBLIC_ORIGIN']+'/library/')
         url=Path(app.config['SHARE_URL_FILE']).read_text().strip()
         if not url.startswith(app.config['PUBLIC_ORIGIN']+'/library/#key='):
             abort(503)
@@ -205,7 +243,22 @@ def create_app(config=None, ai=None):
         if not ai_lock.acquire(blocking=False):
             return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'), 429
         try:
-            sources, partial = read_document(app.config['DB_PATH'], file_id, ai.settings.max_chars)
+            extra=documents.get(file_id)
+            if extra:
+                if not extra['pages']:
+                    raise AIError('이 문서에서 읽을 수 있는 글자를 찾지 못했습니다.')
+                sources,remaining=[],ai.settings.max_chars
+                partial=extra['status']=='partial'
+                for page in extra['pages']:
+                    if remaining<=0 or len(sources)>=24:
+                        partial=True
+                        break
+                    text=page['text'][:remaining]
+                    partial|=len(text)<len(page['text'])
+                    sources.append({'text':text,'label':page['label'],'file_id':file_id,'page':page['page']})
+                    remaining-=len(text)
+            else:
+                sources, partial = read_document(app.config['DB_PATH'], file_id, ai.settings.max_chars)
             return jsonify(ai.run(data['task'], sources, question, partial))
         finally:
             ai_lock.release()
@@ -222,7 +275,11 @@ def main():
     secret=os.environ.get('PROJECT_HUB_LIBRARY_SESSION_KEY', '')
     if len(share_hash)!=64 or len(secret)<32 or not origin.startswith('https://'):
         raise RuntimeError('Library share key and HTTPS origin must be configured')
-    app = create_app({'SHARE_HASH':share_hash,'SECRET_KEY':secret,'PUBLIC_ORIGIN': origin}, Organizer(Settings.from_env()))
+    settings=Settings.from_env()
+    app = create_app({'SHARE_HASH':share_hash,'SECRET_KEY':secret,'PUBLIC_ORIGIN': origin,
+                      'PUBLIC_ACCESS':os.environ.get('PROJECT_HUB_LIBRARY_PUBLIC')=='true',
+                      'DOCUMENT_CACHE':settings.state/'library-text.db'}, Organizer(settings))
+    app.extensions['documents'].start()
     serve(app, host='127.0.0.1', port=8090, threads=4, max_request_body_size=8192,
           clear_untrusted_proxy_headers=True)
 

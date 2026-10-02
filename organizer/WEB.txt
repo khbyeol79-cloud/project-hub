@@ -3,11 +3,16 @@ Project Hub 모바일 자료실
 실행 환경: Python 3.11, requirements-web.txt. 웹 서비스는 별도 가상환경으로 실행합니다.
 기능: 파일명/본문 검색, 채널 필터, 추출된 본문 열람, 원본 다운로드,
 선택한 문서의 AI 요약·질문, 출처 구간 이동, 공유 링크 복사.
-파일 변환/색인은 수집 봇의 기존 content_* 테이블을 읽으며 수정하지 않습니다.
-본문이 준비되지 않은 파일은 다운로드만 가능합니다. 전체 이미지/PPT 변환 뷰어는
-이번 범위에 포함되지 않습니다. 일반 대화 수집과 여러 문서를 합친 질문도 별도 작업입니다.
+수집 봇의 기존 content_* 테이블은 읽기 전용입니다. Markdown, HTML, PPTX는 별도
+library-text.db에 본문을 추출해 검색·열람·AI 질문에 사용합니다. HTML 스크립트는 실행하지
+않습니다. PPTX는 슬라이드 순서대로 텍스트를 표시하며 원본 배치를 재현하지 않습니다.
+PNG/JPEG/GIF/WebP는 이미지 미리보기를 제공합니다. 이미지뿐인 PPTX, 옛 DOC/PPT 형식은
+본문 변환 대상이 아닙니다. 여러 문서를 합친 질문은 별도 작업입니다.
 
 접근 방식
+- library.env에서 PROJECT_HUB_LIBRARY_PUBLIC=true이면 /library/ 짧은 주소로 모든 자료와
+  다운로드·AI에 로그인 없이 접근합니다. 주소를 발견한 사람도 접근할 수 있습니다.
+  아래 공유 토큰 제한은 이 옵션을 끈 기본 모드에 적용됩니다.
 - 사용자가 받은 https://도메인/library/#key=... 링크로 접속하면 자동으로 세션을 얻습니다.
 - 링크 소지자는 모든 수집 자료 열람·다운로드·AI 질문·재공유가 가능합니다.
 - 별도 계정, 로그인 폼, OTP가 없습니다. Discord 채널별 사용자 권한도 적용하지 않습니다.
@@ -35,10 +40,19 @@ venv311 준비 후 sudo python3 /home/khb/project-hub/organizer/install_web.py �
 링크 폐기·재발급
   python -m organizer.share --origin https://khbps.duckdns.org --rotate
   sudo systemctl restart project-hub-library.service
-재시작하면 이전 링크와 기존 세션이 모두 무효화됩니다. 새 URL만 다시 전달하세요.
+토큰 모드에서 재시작하면 이전 링크와 기존 세션이 모두 무효화됩니다. 새 URL만 다시 전달하세요.
+공개 모드에서는 토큰 교체로 접근을 차단할 수 없습니다. PUBLIC 옵션을 먼저 끄세요.
 기존 링크는 --rotate 없이 덮어쓰지 않습니다.
 
 중지
   sudo systemctl stop project-hub-library.service
 자동 재시작도 끄려면 disable을 사용합니다. Caddy 경로는 유지되며 자료는 노출되지 않습니다.
 운영 확인: systemctl is-active project-hub-library.service / journalctl -u project-hub-library.service
+
+과거 첨부파일 수집 (관리자)
+봇을 일시 중지하고 프로젝트 폴더에서 봇의 Python으로 python -m organizer.backfill 실행 후
+성공·실패와 무관하게 봇을 다시 시작합니다. 지정 채널 및 포럼의 활성/보관 스레드를 조회하며
+기존 중복 판정과 Drive 업로드 대기열을 사용합니다. 일반 대화의 과거 기록은 저장하지 않습니다.
+별도 ~/.local/state/project-hub-ai/backfill.db에 진행 지점을 저장해 중단 후 이어서 실행합니다.
+이 과정은 실시간 수집 커서를 되돌리지 않습니다. 삭제되었거나 봇이 볼 수 없는 메시지는
+복구할 수 없으며 접근 오류가 있으면 채널별 실패를 출력합니다.
