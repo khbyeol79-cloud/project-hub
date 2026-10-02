@@ -18,6 +18,7 @@ from werkzeug.exceptions import HTTPException
 from .ai import AIError, Organizer, Settings
 from .__main__ import read_document
 from .documents import Documents, SUFFIXES
+from .retrieval import retrieve
 
 ROOT = Path(__file__).resolve().parent
 FIELDS = '''f.id, f.original_filename, f.discord_channel, f.discord_channel_id,
@@ -199,6 +200,11 @@ def create_app(config=None, ai=None):
                     pages.append({'page': p['page'], 'label': p['label'] or f"추출 구간 {p['page']}", 'text': text})
                     size += len(text)
             row.update(pages=pages, partial=truncated or row['content_status']=='partial')
+            source_page=request.args.get('source_page',type=int)
+            if source_page and row['content_status'] in {'indexed','partial'} and not any(p['page']==source_page for p in pages):
+                source=db.execute('SELECT body FROM content_pages WHERE file_id=? AND page=?',(file_id,source_page)).fetchone()
+                if source:
+                    pages.append({'page':source_page,'label':f'출처 구간 {source_page}','text':source['body'][:12000]})
             extra=documents.get(file_id)
             if extra:
                 row.update(pages=extra['pages'],partial=extra['status']=='partial',content_status=extra['status'])
@@ -272,6 +278,24 @@ def create_app(config=None, ai=None):
         if not url.startswith(app.config['PUBLIC_ORIGIN']+'/library/#key='):
             abort(503)
         return jsonify(url=url)
+
+    @app.post('/library/api/ai')
+    def integrated_ai():
+        data=request.get_json()
+        if not isinstance(data,dict) or data.get('task') not in {'ask','summary'}: abort(400)
+        question=data.get('question','')
+        if not isinstance(question,str) or len(question)>1000 or (data['task']=='ask' and not question.strip()): abort(400)
+        if ai is None: raise AIError('AI 기능이 아직 준비되지 않았습니다.')
+        if not ai_lock.acquire(blocking=False):
+            return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'),429
+        try:
+            sources=retrieve(app.config['DB_PATH'],documents,question if data['task']=='ask' else '',ai.settings.max_chars)
+            if not sources:
+                return jsonify(answer='관련 본문을 찾지 못했습니다. 파일에 쓰인 구체적인 용어로 질문해 주세요.',sources=[],partial=True,cached=False,matched_files=0)
+            result=ai.run(data['task'],sources,question,True)
+            result['matched_files']=len({s['file_id'] for s in sources})
+            return jsonify(result)
+        finally: ai_lock.release()
 
     @app.post('/library/api/files/<int:file_id>/ai')
     def ask(file_id):

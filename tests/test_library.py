@@ -234,6 +234,26 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(r.status_code,200)
         self.assertEqual(self.ai.run.call_args.args[1][0]['text'],'sensor Friday')
 
+    def test_integrated_ai_retrieves_multiple_files_and_rejects_stale(self):
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("INSERT INTO files(id,original_filename,sha256,uploaded_at) VALUES(2,'second.txt','fresh','2026-10-03')")
+            db.execute("INSERT INTO content_documents VALUES(2,'fresh','indexed')")
+            db.execute("INSERT INTO content_pages VALUES(2,1,'sensor Monday','sensor monday')")
+        self.assertEqual(self.client.post('/library/api/ai',json={'task':'ask','question':'sensor'}).status_code,403)
+        result=self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'sensor'})
+        self.assertEqual(result.status_code,200)
+        sources=self.ai.run.call_args.args[1]
+        self.assertEqual({s['file_id'] for s in sources},{1,2})
+        self.assertLessEqual(sum(len(s['text']) for s in sources),12000)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE files SET sha256='changed' WHERE id=2")
+        self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'sensor'})
+        self.assertEqual({s['file_id'] for s in self.ai.run.call_args.args[1]},{1})
+        self.ai.run.reset_mock()
+        result=self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'unfindableword'})
+        self.assertEqual(result.json['matched_files'],0)
+        self.ai.run.assert_not_called()
+
     def test_security_headers_and_static_allowlist(self):
         r=self.client.get('/library/',headers=self.headers)
         self.assertIn("script-src 'self'",r.headers['Content-Security-Policy'])

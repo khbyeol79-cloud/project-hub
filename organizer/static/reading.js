@@ -21,7 +21,7 @@ function readingText(parent,text,markdown){
 }
 function renderReading(f,preview){
  const host=$('pages');host.replaceChildren();
- const toolbar=node('div',undefined,'reading-toolbar');const easy=node('button','편하게 읽기');const original=node('button','원본 보기');const zoom=node('button','글자 크게');zoom.setAttribute('aria-pressed','false');toolbar.append(easy,original,zoom);host.append(toolbar);
+ const toolbar=node('div',undefined,'reading-toolbar');const easy=node('button','변환 보기');const original=node('button','원본 보기');const zoom=node('button','글자 크게');zoom.setAttribute('aria-pressed','false');toolbar.append(easy,original,zoom);host.append(toolbar);
  const article=node('article',undefined,'comfortable-reading');article.id='comfortable-reading';
  if(f.reading_blocks?.length?f.reading_partial:f.partial)article.append(node('p','일부 내용만 표시됩니다. 전체 내용과 정확한 배치는 원본에서 확인해 주세요.','notice'));
  if(f.reading_blocks?.length)f.reading_blocks.forEach(b=>readingBlock(article,b));
