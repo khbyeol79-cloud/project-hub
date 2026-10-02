@@ -42,11 +42,13 @@ class HistoryCollector:
             # Local file + SQLite persistence is enough. Drive has its own durable queue.
             if not await self.process_message(message, upload=False):
                 logger.error("HISTORY_MESSAGE_BLOCKED | channel=%s | message_id=%s", channel_id, message.id)
-                break
+                database.record_health("history:" + str(channel_id), "AttachmentSaveFailed")
+                return False
             database.advance_channel_cursor(channel_id, message.id)
             processed += 1
         if processed:
             logger.info("HISTORY_SCANNED | channel=%s | messages=%s", channel_id, processed)
+        database.record_health("history:" + str(channel_id))
         return processed == self.batch_size
 
     async def scan_once(self):
@@ -57,6 +59,7 @@ class HistoryCollector:
             except Exception as exc:
                 # Permission and connection failures on one channel must not block others.
                 logger.error("HISTORY_SCAN_FAILED | channel=%s | error=%s", channel_id, type(exc).__name__)
+                database.record_health("history:" + str(channel_id), type(exc).__name__)
         return more
 
     async def run(self):

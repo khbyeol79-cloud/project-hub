@@ -33,6 +33,10 @@ CATEGORY_FOLDERS = {
 ROOT_FOLDER_NAME = "Project Hub"
 
 
+class AuthorizationRequired(RuntimeError):
+    """Background upload needs interactive authorization on the user's PC."""
+
+
 def get_drive_service(interactive=True):
     creds = None
 
@@ -49,7 +53,7 @@ def get_drive_service(interactive=True):
 
         else:
             if not interactive:
-                raise RuntimeError("Google OAuth login required; run bot/drive.py locally")
+                raise AuthorizationRequired("Google OAuth login required; run bot/drive.py locally")
             flow = InstalledAppFlow.from_client_secrets_file(
                 CREDENTIALS_PATH,
                 SCOPES

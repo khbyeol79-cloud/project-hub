@@ -16,11 +16,13 @@ if __package__:
     from .drive import CATEGORY_FOLDERS
     from .upload_queue import UploadWorker, write_metadata
     from .history import HistoryCollector
+    from .monitoring import HealthMonitor
 else:
     import database
     from drive import CATEGORY_FOLDERS
     from upload_queue import UploadWorker, write_metadata
     from history import HistoryCollector
+    from monitoring import HealthMonitor
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = BASE_DIR / "storage"
@@ -67,8 +69,10 @@ async def retry_uploads():
     while True:
         try:
             await retry_pending_once()
+            database.record_health("retry_queue")
         except Exception as exc:
             logger.error("RETRY_QUEUE_FAILED | error=%s", type(exc).__name__)
+            database.record_health("retry_queue", type(exc).__name__)
         await asyncio.sleep(30)
 
 
@@ -76,14 +80,26 @@ class CollectorClient(discord.Client):
     retry_task = None
     history_task = None
     history_collector = None
+    monitor_task = None
+    health_monitor = None
 
     async def setup_hook(self):
+        alert_channel = os.getenv("DISCORD_ALERT_CHANNEL_ID", "").strip()
+        if alert_channel and (not alert_channel.isascii() or not alert_channel.isdecimal() or int(alert_channel) <= 0):
+            raise ValueError("DISCORD_ALERT_CHANNEL_ID must be a positive channel ID or empty")
         self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message)
         self.history_collector.initialize()
         self.retry_task = asyncio.create_task(retry_uploads())
         self.history_task = asyncio.create_task(self.history_collector.run())
+        self.health_monitor = HealthMonitor(self, CHANNEL_MAP, alert_channel)
+        self.monitor_task = asyncio.create_task(self.health_monitor.run())
 
     async def close(self):
+        if self.monitor_task:
+            self.monitor_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.monitor_task
+            self.monitor_task = None
         if self.history_task:
             self.history_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -185,6 +201,11 @@ async def process_message(message, *, upload=True):
 
 @client.event
 async def on_message(message):
+    if client.health_monitor:
+        try:
+            await client.health_monitor.handle_status(message)
+        except Exception as exc:
+            logger.error("STATUS_RESPONSE_FAILED | error=%s", type(exc).__name__)
     await process_message(message)
 
 

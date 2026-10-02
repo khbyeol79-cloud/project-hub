@@ -83,6 +83,20 @@ def init_db():
         last_message_id TEXT NOT NULL,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS health_checks (
+        check_key TEXT PRIMARY KEY,
+        failures INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        last_checked_at TEXT,
+        last_success_at TEXT
+    )""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS alert_deliveries (
+        channel_id TEXT NOT NULL,
+        issue_key TEXT NOT NULL,
+        active INTEGER NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(channel_id, issue_key)
+    )""")
 
     conn.commit()
     conn.close()
@@ -318,3 +332,48 @@ def advance_channel_cursor(channel_id, message_id):
             SET last_message_id = ?, updated_at = CURRENT_TIMESTAMP
             WHERE channel_id = ? AND CAST(last_message_id AS INTEGER) < ?""",
             (str(message_id), str(channel_id), int(message_id)))
+
+
+def record_health(check_key, error=None):
+    # Only callers' fixed error codes/type names belong here, never exception text.
+    with closing(get_connection()) as conn, conn:
+        conn.execute("""INSERT INTO health_checks
+            (check_key, failures, last_error, last_checked_at, last_success_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, CASE WHEN ? IS NULL THEN CURRENT_TIMESTAMP END)
+            ON CONFLICT(check_key) DO UPDATE SET
+                failures = CASE WHEN excluded.last_error IS NULL THEN 0 ELSE health_checks.failures + 1 END,
+                last_error = excluded.last_error,
+                last_checked_at = CURRENT_TIMESTAMP,
+                last_success_at = CASE WHEN excluded.last_error IS NULL THEN CURRENT_TIMESTAMP
+                                       ELSE health_checks.last_success_at END""",
+            (check_key, int(error is not None), error, error))
+
+
+def health_snapshot(channel_map):
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        totals = dict(conn.execute("SELECT upload_status, COUNT(*) FROM files GROUP BY upload_status").fetchall())
+        alarm_count = conn.execute("""SELECT COUNT(*) FROM files WHERE upload_status = 'failed'
+            AND (upload_attempts >= 3 OR last_upload_error IN ('RefreshError', 'AuthorizationRequired'))""").fetchone()[0]
+        checks = {row["check_key"]: dict(row) for row in conn.execute("SELECT * FROM health_checks")}
+        channels = []
+        for channel_id, category in channel_map.items():
+            row = conn.execute("""SELECT COUNT(*) AS collected, MAX(created_at) AS last_collected_at
+                FROM files WHERE discord_channel_id = ?""", (str(channel_id),)).fetchone()
+            channels.append(dict(row, channel_id=str(channel_id), category=category,
+                                 history=checks.get("history:" + str(channel_id))))
+        return {"totals": totals, "upload_alarm_count": alarm_count, "checks": checks, "channels": channels}
+
+
+def active_alerts(channel_id):
+    with closing(get_connection()) as conn:
+        return {row[0] for row in conn.execute(
+            "SELECT issue_key FROM alert_deliveries WHERE channel_id = ? AND active = 1", (str(channel_id),))}
+
+
+def record_alert_delivery(channel_id, issue_key, active):
+    with closing(get_connection()) as conn, conn:
+        conn.execute("""INSERT INTO alert_deliveries(channel_id, issue_key, active) VALUES (?, ?, ?)
+            ON CONFLICT(channel_id, issue_key) DO UPDATE
+            SET active = excluded.active, updated_at = CURRENT_TIMESTAMP""",
+            (str(channel_id), issue_key, int(active)))

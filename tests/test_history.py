@@ -145,6 +145,7 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
             await client.setup_hook()
             history_task = client.history_task
             retry_task = client.retry_task
+            monitor_task = client.monitor_task
             with patch.object(bot, "client", client):
                 await bot.on_ready()
                 client.history_collector.wakeup.clear()
@@ -154,3 +155,4 @@ class HistoryTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
         self.assertTrue(history_task.cancelled())
         self.assertTrue(retry_task.cancelled())
+        self.assertTrue(monitor_task.cancelled())
