@@ -44,6 +44,10 @@ def extract(job):
     if hashlib.sha256(data).hexdigest()!=job['sha256']:
         return {'status':'changed','pages':[]}
     suffix=Path(job['filename']).suffix.lower()
+    if job.get('reading'):
+        import runpy
+        reader=runpy.run_path(str(Path(__file__).with_name('reading.py')))
+        return reader['extract_reading'](data,suffix)
     if suffix in {'.md','.markdown','.html','.htm'}:
         if data.startswith((b'\xff\xfe',b'\xfe\xff')):
             text=data.decode('utf-16')

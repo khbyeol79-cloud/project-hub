@@ -30,20 +30,21 @@ class Documents:
             row=db.execute('SELECT id,original_filename,local_path,sha256 FROM files WHERE id=?',(file_id,)).fetchone()
             return dict(row) if row else None
 
-    def get(self,file_id):
+    def get(self,file_id,reading=False):
         row=self.metadata(file_id)
-        if not row or Path(row['original_filename']).suffix.lower() not in SUFFIXES:
+        if not row or Path(row['original_filename']).suffix.lower() not in ({'.docx','.html','.htm'} if reading else SUFFIXES):
             return None
+        cache_id=-file_id if reading else file_id
         with self.lock:
             with closing(sqlite3.connect(self.cache)) as db:
-                saved=db.execute('SELECT result,updated FROM documents WHERE id=? AND sha=?',(file_id,row['sha256'])).fetchone()
+                saved=db.execute('SELECT result,updated FROM documents WHERE id=? AND sha=?',(cache_id,row['sha256'])).fetchone()
             if saved:
                 result=json.loads(saved[0])
                 if result['status'] in {'indexed','partial','no_text','too_large','binary_text'} or time.time()-saved[1]<300:
                     return result
             path=Path(row['local_path'])
             if not path.is_absolute(): path=self.source.parent/path
-            job={'path':str(path),'storage':str(self.storage),'filename':row['original_filename'],'sha256':row['sha256']}
+            job={'path':str(path),'storage':str(self.storage),'filename':row['original_filename'],'sha256':row['sha256'],'reading':reading}
             env={k:v for k,v in os.environ.items() if k.upper() in {'PATH','SYSTEMROOT','WINDIR','TEMP','TMP','LANG','LC_ALL'}}
             try:
                 proc=subprocess.run([sys.executable,'-I',str(Path(__file__).with_name('extract_extra.py'))],
@@ -53,7 +54,7 @@ class Documents:
                 result={'status':'failed','pages':[]}
             with closing(sqlite3.connect(self.cache)) as db, db:
                 db.execute('INSERT OR REPLACE INTO documents VALUES(?,?,?,?,?)',
-                    (file_id,row['sha256'],json.dumps(result), '\n'.join(p['text'] for p in result['pages']).casefold(),time.time()))
+                    (cache_id,row['sha256'],json.dumps(result), '\n'.join(p['text'] for p in result['pages']).casefold(),time.time()))
             return result
 
     def matches(self,query):

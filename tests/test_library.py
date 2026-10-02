@@ -105,6 +105,25 @@ class LibraryTests(unittest.TestCase):
         result=extract(self.put_file('plan.html',body))
         self.assertEqual(result['pages'][0]['text'],'Plan\nFriday & Monday')
 
+    def test_reading_preserves_html_structure_without_active_markup(self):
+        self.put_file('plan.html',b'<h1>Plan</h1><script>secret()</script><table><tr><td>A</td><td>B</td></tr></table>')
+        detail=self.client.get('/library/api/files/1').json
+        self.assertEqual(detail['reading_blocks'][0],{'type':'h1','text':'Plan'})
+        self.assertEqual(detail['reading_blocks'][1]['rows'],[['A','B']])
+        self.assertNotIn('secret',str(detail['reading_blocks']))
+        self.assertTrue(detail['pages'])
+
+    def test_docx_reading_preserves_table_and_original_source_pages(self):
+        out=io.BytesIO()
+        with zipfile.ZipFile(out,'w') as z:
+            z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Plan</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>')
+        self.put_file('plan.docx',out.getvalue())
+        before=self.db.read_bytes()
+        detail=self.client.get('/library/api/files/1').json
+        self.assertEqual(detail['reading_blocks'][0]['type'],'h2')
+        self.assertEqual(detail['reading_blocks'][1]['rows'],[['Cell']])
+        self.assertEqual(self.db.read_bytes(),before)
+
     def test_html_preview_is_isolated_and_authenticated(self):
         self.put_file('plan.html',b'<style>h1{color:red}</style><h1>Plan</h1><script>alert(1)</script>')
         route='/library/files/1/html-preview'

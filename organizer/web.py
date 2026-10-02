@@ -57,7 +57,7 @@ def create_app(config=None, ai=None):
             if (not app.config['PUBLIC_ORIGIN'] or request.headers.get('Origin') != app.config['PUBLIC_ORIGIN']
                     or request.headers.get('X-Requested-With') != 'ProjectHub' or not request.is_json):
                 abort(403)
-        if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/api/access'}:
+        if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/assets/reading.js', '/library/api/access'}:
             return
         if app.config['PUBLIC_ACCESS']:
             return
@@ -100,7 +100,7 @@ def create_app(config=None, ai=None):
 
     @app.get('/library/assets/<name>')
     def asset(name):
-        if name not in {'app.js', 'style.css'}:
+        if name not in {'app.js', 'style.css', 'reading.js'}:
             abort(404)
         return send_file(ROOT / 'static' / name)
 
@@ -202,6 +202,9 @@ def create_app(config=None, ai=None):
             extra=documents.get(file_id)
             if extra:
                 row.update(pages=extra['pages'],partial=extra['status']=='partial',content_status=extra['status'])
+            reading=documents.get(file_id,reading=True)
+            row['reading_blocks']=reading.get('blocks',[]) if reading else []
+            row['reading_partial']=reading.get('status')=='partial' if reading else False
             row['image_preview']=Path(row['original_filename']).suffix.lower() in {'.png','.jpg','.jpeg','.gif','.webp'}
             return jsonify(row)
 
