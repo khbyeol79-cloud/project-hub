@@ -46,6 +46,7 @@ def create_app(config=None, ai=None):
     def connect():
         db = sqlite3.connect(Path(app.config['DB_PATH']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
         db.row_factory = sqlite3.Row
+        db.create_function('file_ext',1,lambda name: Path(name or '').suffix.lower() or '(none)',deterministic=True)
         return db
 
     @app.before_request
@@ -128,6 +129,12 @@ def create_app(config=None, ai=None):
     def files():
         query = request.args.get('q', '').strip()[:100]
         channel = request.args.get('channel', '')[:100]
+        extension = request.args.get('extension','').lower()[:100]
+        orders={'date_desc':'f.uploaded_at DESC, f.id DESC','date_asc':'f.uploaded_at ASC, f.id ASC',
+                'name_asc':'f.original_filename COLLATE NOCASE ASC, f.id ASC',
+                'name_desc':'f.original_filename COLLATE NOCASE DESC, f.id DESC'}
+        order=orders.get(request.args.get('sort','date_desc'))
+        if order is None: abort(400)
         try:
             offset = max(0, min(int(request.args.get('offset', '0')), 100000))
         except ValueError:
@@ -146,17 +153,22 @@ def create_app(config=None, ai=None):
         if channel:
             conditions.append('f.discord_channel_id=?')
             params.append(channel)
+        if extension:
+            conditions.append('file_ext(f.original_filename)=?')
+            params.append(extension)
         where = ' WHERE ' + ' AND '.join(conditions) if conditions else ''
         with closing(connect()) as db:
             rows = db.execute('SELECT ' + FIELDS + ' FROM files f LEFT JOIN content_documents d ON d.file_id=f.id'
-                              + where + ' ORDER BY f.id DESC LIMIT 31 OFFSET ?', params + [offset]).fetchall()
+                              + where + ' ORDER BY '+order+' LIMIT 31 OFFSET ?', params + [offset]).fetchall()
             channels = [dict(r) for r in db.execute('SELECT DISTINCT discord_channel_id AS id, discord_channel AS name FROM files ORDER BY name')]
+            extensions=[r[0] for r in db.execute('SELECT DISTINCT file_ext(original_filename) FROM files ORDER BY 1')]
+            total=db.execute('SELECT count(*) FROM files f'+where,params).fetchone()[0]
         items=[dict(r) for r in rows[:30]]
         for item in items:
             if Path(item['original_filename']).suffix.lower() in SUFFIXES:
                 extra=documents.get(item['id'])
                 if extra: item['content_status']=extra['status']
-        return jsonify(files=items, more=len(rows)>30, channels=channels)
+        return jsonify(files=items, more=len(rows)>30, channels=channels,extensions=extensions,total=total)
 
     def file_row(db, file_id):
         row = db.execute('SELECT ' + FIELDS + ', f.local_path FROM files f LEFT JOIN content_documents d ON d.file_id=f.id WHERE f.id=?', (file_id,)).fetchone()

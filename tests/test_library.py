@@ -173,6 +173,24 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(self.client.get('/library/api/files?channel=999',headers=self.headers).json['files'],[])
         self.assertEqual(self.client.get('/library/api/files?q=%27%20OR%201=1',headers=self.headers).json['files'],[])
 
+    def test_extension_sort_and_pagination_use_full_collection(self):
+        with closing(sqlite3.connect(self.db)) as db, db:
+            for i in range(2,36):
+                db.execute('INSERT INTO files(id,original_filename,discord_channel_id,uploaded_at) VALUES(?,?,?,?)',
+                           (i,f'{i:02d}.PDF','123','2026-09-01' if i==35 else '2026-10-01'))
+        base='/library/api/files?extension=.pdf&channel=123'
+        first=self.client.get(base+'&sort=name_asc').json
+        second=self.client.get(base+'&sort=name_asc&offset=30').json
+        self.assertEqual(first['total'],34)
+        self.assertTrue(first['more'])
+        self.assertEqual([r['id'] for r in first['files']+second['files']],list(range(2,36)))
+        self.assertEqual(self.client.get(base+'&sort=date_asc').json['files'][0]['id'],35)
+        self.assertEqual(self.client.get(base+'&sort=date_desc').json['files'][0]['id'],34)
+        self.assertEqual(self.client.get(base+'&sort=name_desc').json['files'][0]['id'],35)
+        self.assertEqual(self.client.get(base+'&q=sample').json['total'],0)
+        self.assertIn('.pdf',first['extensions'])
+        self.assertEqual(self.client.get(base+'&sort=malicious').status_code,400)
+
     def test_stale_content_hidden_from_search_and_detail(self):
         with closing(sqlite3.connect(self.db)) as db, db:
             db.execute("UPDATE files SET sha256='new'")
