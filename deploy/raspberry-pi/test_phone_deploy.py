@@ -12,6 +12,15 @@ spec.loader.exec_module(deploy)
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_line_endings_do_not_trigger_code_deployment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = Path(tmp) / 'a.py', Path(tmp) / 'b.py'
+            a.write_bytes(b'x = 1\r\n')
+            b.write_bytes(b'x = 1\n')
+            self.assertTrue(deploy.same_code(a, b))
+            b.write_bytes(b'x = 2\n')
+            self.assertFalse(deploy.same_code(a, b))
+
     def test_only_application_code_is_allowed(self):
         for name in ['bot/discord_bot.py', 'organizer/web.py', 'organizer/static/app.js']:
             self.assertTrue(deploy.allowed(name), name)

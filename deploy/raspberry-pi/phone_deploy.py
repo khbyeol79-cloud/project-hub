@@ -24,6 +24,13 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
+def same_code(left, right):
+    # Existing PC-copied production files may have CRLF. Avoid needless restarts.
+    return (left.is_file() and right.is_file()
+            and left.read_bytes().replace(b'\r\n', b'\n')
+            == right.read_bytes().replace(b'\r\n', b'\n'))
+
+
 def allowed(name):
     p = Path(name)
     if p.is_absolute() or '..' in p.parts or '\\' in name:
@@ -138,7 +145,7 @@ def main():
         removed = [name for name in existing if allowed(name) and name not in names]
         if removed:
             parser.error('Code deletion requires a manual plan: ' + ', '.join(removed))
-        changed = [name for name in names if digest(root / name) != digest(checkout / name)]
+        changed = [name for name in names if not same_code(root / name, checkout / name)]
         print('Commit:', sha)
         print('Code changes:', ', '.join(changed) or '(none)')
         # Tests run in the credential-free checkout with its own Python 3.11 environment.
