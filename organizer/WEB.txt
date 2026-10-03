@@ -1,0 +1,83 @@
+Project Hub 모바일 자료실
+
+실행 환경: Python 3.11, requirements-web.txt. 웹 서비스는 별도 가상환경으로 실행합니다.
+기능: 파일명/본문 검색, 채널 필터, 추출된 본문 열람, 원본 다운로드,
+선택한 문서의 AI 요약·질문, 출처 구간 이동, 공유 링크 복사.
+수집 봇의 기존 content_* 테이블은 읽기 전용입니다. Markdown, HTML, PPTX는 별도
+library-text.db에 본문을 추출해 검색·열람·AI 질문에 사용합니다. HTML 스크립트는 실행하지
+않습니다. PPTX는 슬라이드 순서대로 텍스트를 표시하며 원본 배치를 재현하지 않습니다.
+PNG/JPEG/GIF/WebP는 이미지 미리보기를 제공합니다. 이미지뿐인 PPTX, 옛 DOC/PPT 형식은
+본문 변환 대상이 아닙니다. 여러 문서를 합친 질문은 별도 작업입니다.
+
+접근 방식
+- library.env에서 PROJECT_HUB_LIBRARY_PUBLIC=true이면 /library/ 짧은 주소로 모든 자료와
+  다운로드·AI에 로그인 없이 접근합니다. 주소를 발견한 사람도 접근할 수 있습니다.
+  아래 공유 토큰 제한은 이 옵션을 끈 기본 모드에 적용됩니다.
+- 사용자가 받은 https://도메인/library/#key=... 링크로 접속하면 자동으로 세션을 얻습니다.
+- 링크 소지자는 모든 수집 자료 열람·다운로드·AI 질문·재공유가 가능합니다.
+- 별도 계정, 로그인 폼, OTP가 없습니다. Discord 채널별 사용자 권한도 적용하지 않습니다.
+- 링크 없는 사용자는 자료/본문/다운로드/API에 접근할 수 없습니다. 공개되는 것은 빈 UI뿐입니다.
+- 토큰은 URL fragment에서 읽어 POST로 교환한 뒤 주소창에서 제거합니다. 서버 접근 로그에
+  토큰 URL을 남기지 않으며 Referrer-Policy=no-referrer, noindex, no-store를 설정합니다.
+- 공유는 화면의 '공유 링크 복사'를 사용합니다. 주소창에는 토큰이 남지 않습니다.
+- 세션 쿠키는 Secure/HttpOnly/SameSite=Strict, /library/ 경로, 14일 유효입니다.
+- POST는 설정된 HTTPS origin과 JSON/사용자 정의 헤더를 검사합니다.
+- 자료실은 127.0.0.1:8090에서만 수신합니다. Caddy가 /library 및 /library/*만 연결하고,
+  기존 code-server 경로는 Authelia 2단계 인증을 계속 거칩니다.
+- AI 한도는 모든 링크 사용자가 공유합니다. 기본 하루 20회, 월 300회이며 계정 전체 과금
+  상한은 아닙니다. AI는 서버에서 한 번에 하나만 실행하고 다른 요청은 대기 안내를 반환합니다.
+
+Pi 설정 (khb 사용자)
+  python -m organizer.share --origin https://khbps.duckdns.org
+설정: ~/.config/project-hub/library.env (600)
+공유 주소: ~/.config/project-hub/library-share-url.txt (600)
+키, 설정, 공유 주소, AI 결과 DB는 Git에 넣지 않습니다.
+venv311 준비 후 sudo python3 /home/khb/project-hub/organizer/install_web.py 로 설치합니다.
+설치기는 Caddy 설정을 검증·백업하고 서비스 등록 및 /library 경로 연결을 수행합니다.
+설정이 예상과 다르면 변경하지 않으며, 시작/연결 실패 시 기존 상태로 복구합니다.
+서비스는 PC가 꺼져도 Pi에서 동작하며 Pi 재부팅 후 자동 시작합니다.
+
+링크 폐기·재발급
+  python -m organizer.share --origin https://khbps.duckdns.org --rotate
+  sudo systemctl restart project-hub-library.service
+토큰 모드에서 재시작하면 이전 링크와 기존 세션이 모두 무효화됩니다. 새 URL만 다시 전달하세요.
+공개 모드에서는 토큰 교체로 접근을 차단할 수 없습니다. PUBLIC 옵션을 먼저 끄세요.
+기존 링크는 --rotate 없이 덮어쓰지 않습니다.
+
+중지
+  sudo systemctl stop project-hub-library.service
+자동 재시작도 끄려면 disable을 사용합니다. Caddy 경로는 유지되며 자료는 노출되지 않습니다.
+운영 확인: systemctl is-active project-hub-library.service / journalctl -u project-hub-library.service
+
+과거 첨부파일 수집 (관리자)
+봇을 일시 중지하고 프로젝트 폴더에서 봇의 Python으로 python -m organizer.backfill 실행 후
+성공·실패와 무관하게 봇을 다시 시작합니다. 지정 채널 및 포럼의 활성/보관 스레드를 조회하며
+기존 중복 판정과 Drive 업로드 대기열을 사용합니다. 일반 대화의 과거 기록은 저장하지 않습니다.
+별도 ~/.local/state/project-hub-ai/backfill.db에 진행 지점을 저장해 중단 후 이어서 실행합니다.
+이 과정은 실시간 수집 커서를 되돌리지 않습니다. 삭제되었거나 봇이 볼 수 없는 메시지는
+복구할 수 없으며 접근 오류가 있으면 채널별 실패를 출력합니다.
+
+본문 미리보기
+Drive 업로드가 완료된 파일은 본문 영역의 Drive 미리보기로 표시합니다. 미지원 형식은
+Drive로 보기 또는 다운로드를 사용합니다. HTML/HTM은 로컬 페이지를 별도 sandbox iframe에
+표시하며 스크립트·폼·외부 리소스 연결을 차단합니다. CSS와 내장 이미지는 표시하지만
+스크립트로 생성되는 차트·3D 화면은 동작하지 않을 수 있습니다. 추출 텍스트는 아래에서
+펼칠 수 있고, AI 출처를 누르면 해당 텍스트 구간을 펼쳐 표시합니다.
+
+자료 목록은 별도 스크롤을 사용합니다. 채널·확장자·검색을 조합하고 파일명 오름/내림차순,
+Discord 업로드 날짜 최신/오래된순으로 전체 결과를 정렬할 수 있습니다. 모바일에서는
+상단 메뉴 버튼으로 목록을 열고 닫으며 파일 선택 후에도 필터와 목록 위치를 유지합니다.
+
+모바일은 텍스트가 있으면 편하게 읽기를 기본으로 사용합니다. Word/HTML은 별도 읽기용
+블록으로 제목·문단·표를 표시하며 기존 검색/AI 출처 인덱스를 변경하지 않습니다.
+Markdown은 제목·목록·표·코드 블록, PDF는 기존 추출 텍스트의 줄바꿈을 정리해 표시합니다.
+PDF 다단/표 배치는 정확히 복원되지 않을 수 있습니다. 원본 보기와 글자 확대를 제공합니다.
+Word의 이미지·병합 셀·각주와 복잡한 HTML 중첩 구조는 원본에서 확인하세요.
+
+통합 AI
+화면의 통합 AI/전체 자료에 질문하기는 선택한 파일이나 목록 필터와 무관하게 전체 파일의
+최신 본문 색인을 검색합니다. 키워드 기반 검색으로 최대 12구간, 파일별 2구간, 합계 12000자
+이내를 보냅니다. 관련 내용이 없으면 AI를 호출하지 않습니다. 최근 자료 요약은 최근 파일의
+일부 구간 요약이며 전체 자료 요약이 아닙니다. 일반 대화는 이 검색에 아직 포함되지 않습니다.
+출처 버튼은 해당 파일의 추출 구간을 엽니다. 기존 일/월 한도와 요청 잠금을 공유합니다.
+변환 보기의 이전 이름은 편하게 읽기입니다. HTML 스크립트 차단 정책은 유지됩니다.

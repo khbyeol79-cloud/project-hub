@@ -1,0 +1,11 @@
+@ROOT@/logs/project-hub.log {
+    daily
+    maxsize 20M
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su @USER@ @GROUP@
+}

@@ -1,0 +1,28 @@
+[Unit]
+Description=Project Hub Discord attachment collector
+Wants=network-online.target
+After=network-online.target time-sync.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@ROOT@
+ExecStart=@DEPLOY@/.venv/bin/python -u @DEPLOY@/service_runner.py
+Restart=always
+RestartSec=30
+RestartPreventExitStatus=78
+KillSignal=SIGINT
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=project-hub
+
+[Install]
+WantedBy=multi-user.target
