@@ -100,6 +100,7 @@ class DeploymentTests(unittest.TestCase):
                     return ''
 
                 with patch.object(deploy, '__file__', str(checkout / 'deploy/raspberry-pi/phone_deploy.py')), \
+                     patch.object(deploy.os, 'geteuid', return_value=1000), \
                      patch.object(Path, 'home', return_value=home), \
                      patch.object(deploy, 'run', side_effect=fake_run) as calls, \
                      patch.object(deploy, 'healthy', side_effect=RuntimeError('health failed')), \
