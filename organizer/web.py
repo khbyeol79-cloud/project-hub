@@ -19,6 +19,7 @@ from .ai import AIError, Organizer, Settings
 from .__main__ import read_document
 from .documents import Documents, SUFFIXES
 from .retrieval import retrieve
+from .conversations import Conversations
 
 ROOT = Path(__file__).resolve().parent
 FIELDS = '''f.id, f.original_filename, f.discord_channel, f.discord_channel_id,
@@ -30,7 +31,7 @@ def create_app(config=None, ai=None):
     app = Flask(__name__, static_folder=None)
     app.config.update(DB_PATH=ROOT.parent / 'project_hub.db', STORAGE=ROOT.parent / 'storage',
                       SHARE_HASH='', PUBLIC_ORIGIN='', PUBLIC_ACCESS=False, MAX_CONTENT_LENGTH=8192,
-                      DOCUMENT_CACHE=None,
+                      DOCUMENT_CACHE=None, MESSAGE_CHANNELS=(),
                       SHARE_URL_FILE=Path.home()/'.config/project-hub/library-share-url.txt',
                       SESSION_COOKIE_NAME='ph_library', SESSION_COOKIE_PATH='/library/',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SECURE=True,
@@ -40,6 +41,7 @@ def create_app(config=None, ai=None):
     documents=Documents(app.config['DB_PATH'],app.config['STORAGE'],
                         app.config['DOCUMENT_CACHE'] or Path(app.config['DB_PATH']).parent/'library-text.db')
     app.extensions['documents']=documents
+    conversations=Conversations(app.config['DB_PATH'],app.config['MESSAGE_CHANNELS'])
     ai_lock = threading.Lock()
     access_lock = threading.Lock()
     access_attempts = deque()
@@ -171,6 +173,18 @@ def create_app(config=None, ai=None):
                 if extra: item['content_status']=extra['status']
         return jsonify(files=items, more=len(rows)>30, channels=channels,extensions=extensions,total=total)
 
+    @app.get('/library/api/messages')
+    def messages():
+        try:
+            days=int(request.args.get('days','0'))
+            offset=int(request.args.get('offset','0'))
+            if days not in {0,7,30} or not 0<=offset<=100000: raise ValueError()
+        except ValueError: abort(400)
+        result=conversations.search(request.args.get('q','').strip()[:100],
+                                    request.args.get('channel','')[:100],days,offset)
+        result['enabled']=bool(conversations.channels)
+        return jsonify(result)
+
     def file_row(db, file_id):
         row = db.execute('SELECT ' + FIELDS + ', f.local_path FROM files f LEFT JOIN content_documents d ON d.file_id=f.id WHERE f.id=?', (file_id,)).fetchone()
         if not row:
@@ -285,15 +299,23 @@ def create_app(config=None, ai=None):
         if not isinstance(data,dict) or data.get('task') not in {'ask','summary'}: abort(400)
         question=data.get('question','')
         if not isinstance(question,str) or len(question)>1000 or (data['task']=='ask' and not question.strip()): abort(400)
+        days=data.get('days',0)
+        if type(days) is not int or days not in {0,7,30}: abort(400)
         if ai is None: raise AIError('AI 기능이 아직 준비되지 않았습니다.')
         if not ai_lock.acquire(blocking=False):
             return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'),429
         try:
-            sources=retrieve(app.config['DB_PATH'],documents,question if data['task']=='ask' else '',ai.settings.max_chars)
+            needle=question if data['task']=='ask' else ''
+            chat_sources=conversations.sources(needle,days,ai.settings.max_chars//2)
+            sources=retrieve(app.config['DB_PATH'],documents,needle,
+                             ai.settings.max_chars-sum(len(s['text']) for s in chat_sources)) + chat_sources
             if not sources:
-                return jsonify(answer='관련 본문을 찾지 못했습니다. 파일에 쓰인 구체적인 용어로 질문해 주세요.',sources=[],partial=True,cached=False,matched_files=0)
+                return jsonify(answer='관련 파일 본문이나 공개된 대화를 찾지 못했습니다. 구체적인 용어로 질문해 주세요.',sources=[],partial=True,cached=False,matched_files=0,matched_messages=0)
             result=ai.run(data['task'],sources,question,True)
-            result['matched_files']=len({s['file_id'] for s in sources})
+            if not conversations.current(sources):
+                raise AIError('답변 생성 중 원본 대화가 수정·삭제되었습니다. 다시 질문해 주세요.')
+            result['matched_files']=len({s['file_id'] for s in sources if 'file_id' in s})
+            result['matched_messages']=len(chat_sources)
             return jsonify(result)
         finally: ai_lock.release()
 
@@ -345,6 +367,7 @@ def main():
     settings=Settings.from_env()
     app = create_app({'SHARE_HASH':share_hash,'SECRET_KEY':secret,'PUBLIC_ORIGIN': origin,
                       'PUBLIC_ACCESS':os.environ.get('PROJECT_HUB_LIBRARY_PUBLIC')=='true',
+                      'MESSAGE_CHANNELS':os.environ.get('PROJECT_HUB_LIBRARY_MESSAGE_CHANNELS','').split(','),
                       'DOCUMENT_CACHE':settings.state/'library-text.db'}, Organizer(settings))
     app.extensions['documents'].start()
     serve(app, host='127.0.0.1', port=8090, threads=4, max_request_body_size=8192,

@@ -34,6 +34,15 @@ class OrganizerTests(unittest.TestCase):
             self.client(enabled=False).run('summary', self.sources)
         self.transport.assert_not_called()
 
+    def test_message_citation_url_is_generated_and_revision_invalidates_cache(self):
+        source={'kind':'message','message_id':'101','guild_id':'1','channel_id':'123',
+                'revision':1,'text':'금요일 점검','label':'PLC 대화','url':'https://untrusted.test'}
+        first=self.client().run('summary',[source])
+        self.assertEqual(first['sources'][0]['url'],'https://discord.com/channels/1/123/101')
+        self.assertEqual(first['sources'][0]['kind'],'message')
+        self.client().run('summary',[dict(source,revision=2)])
+        self.assertEqual(self.transport.call_count,2)
+
     def test_cache_persists_across_instances(self):
         first = self.client().run('summary', self.sources)
         second = self.client().run('summary', self.sources)

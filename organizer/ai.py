@@ -155,6 +155,12 @@ class Organizer:
         references = [{'id': f'S{i}', 'label': str(s.get('label', f'자료 {i}'))[:240],
                        'file_id': s.get('file_id'), 'page': s.get('page')}
                       for i, s in enumerate(sources, 1)]
+        from .conversations import discord_url
+        for reference, source in zip(references, sources):
+            if source.get('kind') == 'message':
+                reference.update(kind='message', message_id=source.get('message_id'),
+                                 revision=source.get('revision'),
+                                 url=discord_url(source.get('guild_id'),source.get('channel_id'),source.get('message_id')))
         user = json.dumps({'task': task, 'question': question, 'partial': partial,
                            'sources': normalized}, ensure_ascii=False)
         payload = {'systemInstruction': {'parts': [{'text': SYSTEM}]},

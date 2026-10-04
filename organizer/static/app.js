@@ -5,7 +5,7 @@ const statusNames = {indexed:'본문 준비됨',partial:'일부 본문',pending:
 function node(tag, text, cls) { const e=document.createElement(tag); if(text!==undefined)e.textContent=text; if(cls)e.className=cls; return e; }
 async function api(path, options={}) { const r=await fetch('/library/api/'+path,options); if(r.redirected||!r.headers.get('content-type')?.includes('application/json'))throw Error('자료실 연결을 확인해 주세요.');const data=await r.json();if(!r.ok)throw Error(data.error||'요청에 실패했습니다.');return data; }
 const size = n => n<1024*1024 ? Math.max(1,Math.round(n/1024))+' KB' : (n/1024/1024).toFixed(1)+' MB';
-async function loadFiles(append=false){const seq=++searching; if(!append)offset=0; $('list-message').textContent='자료를 찾고 있어요…';$('more').hidden=true;
+async function loadFiles(append=false){if($('search-kind').value==='messages')return loadMessages(append);const seq=++searching; if(!append)offset=0; $('list-message').textContent='자료를 찾고 있어요…';$('more').hidden=true;
  try {const params=new URLSearchParams({q:$('query').value,channel:$('channel').value,extension:$('extension').value,sort:$('sort').value,offset}); const d=await api('files?'+params); if(seq!==searching)return;
  if(!append)$('files').replaceChildren(); const channel=$('channel').value;$('channel').replaceChildren(new Option('모든 채널','')); d.channels.forEach(c=>$('channel').add(new Option(c.name,c.id)));$('channel').value=channel;const ext=$('extension').value;$('extension').replaceChildren(new Option('모든 파일',''));d.extensions.forEach(e=>$('extension').add(new Option(e==='(none)'?'확장자 없음':e,e)));$('extension').value=ext;if(!append)$('file-scroll').scrollTop=0;
  d.files.forEach(f=>{const b=node('button',undefined,'file');b.dataset.id=f.id;b.classList.toggle('selected',selected?.id===f.id);b.setAttribute('aria-label',f.original_filename+' 열기');b.append(node('span',f.original_filename.split('.').pop().slice(0,5).toUpperCase(),'file-icon'));const info=node('span',undefined,'file-info');info.append(node('span',f.original_filename,'filename'));info.append(node('span',f.discord_channel+' · '+size(f.file_size_bytes),'file-meta'));const meta=node('span',(statusNames[f.content_status]||'원본으로 보기')+' · '+String(f.uploaded_at).slice(0,10),'file-meta');if(f.version>1)meta.append(node('span','v'+f.version,'badge'));if(f.duplicate_type==='exact_duplicate')meta.append(node('span','중복','badge'));info.append(meta);b.append(info);b.onclick=()=>openFile(f.id);$('files').append(b);});
@@ -21,8 +21,8 @@ async function openFile(id,sourcePage=null){setSidebar(false);const seq=++genera
 function updateButtons() {$('summarize').disabled=busy;$('ask-button').disabled=busy;}
 async function usage(){try{const s=await api('status');$('usage').textContent=s.enabled?'오늘 '+s.daily_calls+'/'+s.daily_limit+'회 · 이번 달 '+s.monthly_calls+'/'+s.monthly_limit+'회 사용':'AI 정리 기능이 꺼져 있어요.';}catch{}}
 async function runAI(task){if(busy)return;busy=true;updateButtons();$('ai-status').textContent='자료를 읽고 정리하고 있어요. 잠시 기다려 주세요…';$('answer').hidden=true;
- try{const r=await api('ai',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({task,question:task==='ask'?$('question').value:''})});
- $('answer').hidden=false;$('answer-label').textContent=(task==='ask'?'전체 자료 답변':'최근 자료 정리')+(r.cached?' · 저장된 결과':'');$('answer-body').textContent=r.answer;$('answer-partial').hidden=!r.partial;$('sources').replaceChildren();r.sources.forEach(s=>{const b=node('button','['+s.id+'] '+s.label);b.onclick=async()=>{await openFile(s.file_id,s.page);tab(false);if($('extracted-text'))$('extracted-text').open=true;document.getElementById('page-'+s.page)?.scrollIntoView({behavior:'smooth'});};$('sources').append(b);});$('ai-status').textContent='';
+ try{const r=await api('ai',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({task,question:task==='ask'?$('question').value:'',days:Number($('message-days').value)})});
+ $('answer').hidden=false;$('answer-label').textContent=(task==='ask'?'전체 자료 답변':'최근 자료 정리')+(r.cached?' · 저장된 결과':'');$('answer-body').textContent=r.answer;$('answer-partial').hidden=!r.partial;$('sources').replaceChildren();r.sources.forEach(s=>{if(s.kind==='message'){const a=node('a','['+s.id+'] '+s.label);if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(s.url||'')){a.href=s.url;a.target='_blank';a.rel='noopener noreferrer';}$('sources').append(a);return;}const b=node('button','['+s.id+'] '+s.label);b.onclick=async()=>{await openFile(s.file_id,s.page);tab(false);if($('extracted-text'))$('extracted-text').open=true;document.getElementById('page-'+s.page)?.scrollIntoView({behavior:'smooth'});};$('sources').append(b);});$('ai-status').textContent='';
  }catch(e){$('ai-status').textContent=e.message;}finally{busy=false;updateButtons();usage();}}
 $('search').onsubmit=e=>{e.preventDefault();loadFiles();};$('channel').onchange=()=>loadFiles();$('extension').onchange=()=>loadFiles();$('sort').onchange=()=>loadFiles();$('more').onclick=()=>loadFiles(true);$('tab-text').onclick=()=>tab(false);$('global-ai').onclick=()=>tab(true);$('sidebar-ai').onclick=()=>tab(true);$('summarize').onclick=()=>runAI('summary');$('ask').onsubmit=e=>{e.preventDefault();runAI('ask');};
 async function start(){const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();}start();
@@ -34,3 +34,38 @@ $('menu-toggle').onclick=()=>setSidebar(!document.body.classList.contains('sideb
 $('sidebar-close').onclick=()=>setSidebar(false);$('sidebar-shade').onclick=()=>setSidebar(false);
 document.addEventListener('keydown',e=>{if(!document.body.classList.contains('sidebar-open'))return;if(e.key==='Escape'){setSidebar(false);return;}if(e.key==='Tab'){const items=[...$('library-sidebar').querySelectorAll('button,input,select,[tabindex="0"]')].filter(x=>!x.hidden&&!x.disabled&&x.getClientRects().length);const first=items[0],last=items[items.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
 mobile.addEventListener('change',()=>setSidebar(false));setSidebar(mobile.matches);
+
+async function loadMessages(append=false){
+ const seq=++searching;if(!append)offset=0;
+ $('list-message').textContent='대화를 찾고 있어요…';$('more').hidden=true;
+ try{
+  const d=await api('messages?'+new URLSearchParams({q:$('query').value,channel:$('channel').value,days:$('message-days').value,offset}));
+  if(seq!==searching)return;
+  if(!append){$('files').replaceChildren();$('file-scroll').scrollTop=0;}
+  const channel=$('channel').value;$('channel').replaceChildren(new Option('모든 채널',''));
+  d.channels.forEach(c=>$('channel').add(new Option(c.name,c.id)));$('channel').value=channel;
+  d.messages.forEach(m=>{
+   const b=node('button',undefined,'file');const info=node('span',undefined,'file-info');
+   info.append(node('span',m.author_name+' · '+m.content.slice(0,70),'filename'));
+   info.append(node('span',m.category+' · '+new Date(m.created_at).toLocaleString('ko-KR'),'file-meta'));
+   b.append(info);b.onclick=()=>openMessage(m);$('files').append(b);
+  });
+  offset+=d.messages.length;$('count').textContent=$('files').children.length+'개';$('more').hidden=!d.more;
+  $('list-message').textContent=!d.enabled?'대화 공개가 설정되지 않았습니다.':!$('files').children.length?'조건에 맞는 대화가 없어요.':'';
+ }catch(e){if(seq===searching)$('list-message').textContent=e.message;}
+}
+function openMessage(m){
+ ++generation;selected={kind:'message'};setSidebar(false);tab(false);
+ $('doc-title').textContent=m.author_name+'님의 대화';$('doc-channel').textContent=m.category;
+ $('doc-meta').textContent=new Date(m.created_at).toLocaleString('ko-KR')+(m.edited_at?' · 수정됨':'');
+ $('download').hidden=true;$('drive-view').hidden=true;$('partial').hidden=true;$('pages').replaceChildren();
+ const body=node('div',undefined,'comfortable-reading');body.append(node('p',m.content));
+ if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(m.url||'')){
+  const link=node('a','Discord 원문 보기 ↗','download');link.href=m.url;link.target='_blank';link.rel='noopener noreferrer';body.append(link);
+ }
+ if(m.files.length){body.append(node('h3','이 대화에 첨부된 파일'));m.files.forEach(f=>{const b=node('button',f.original_filename,'secondary');b.onclick=()=>openFile(f.id);body.append(b);});}
+ $('pages').append(body);document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});
+}
+$('search-kind').onchange=()=>{const messages=$('search-kind').value==='messages';$('search-days').hidden=!messages;$('search-days-label').hidden=!messages;$('extension').disabled=messages;$('sort').disabled=messages;$('channel').replaceChildren(new Option('모든 채널',''));loadFiles();};
+$('search-days').onchange=()=>{$('message-days').value=$('search-days').value;loadFiles();};
+$('message-days').onchange=()=>{$('search-days').value=$('message-days').value;if($('search-kind').value==='messages')loadFiles();};

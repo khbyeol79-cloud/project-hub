@@ -6,7 +6,7 @@ import re
 import sqlite3
 
 
-def retrieve(db_path, documents, question, max_chars=12000):
+def search_terms(question):
     tokens=re.findall(r'[a-z0-9가-힣_]+',question.casefold())[:40]
     stop={'무엇','뭐야','뭐로','어떻게','알려줘','정리해줘','요약','자료','전체','대한','관련','있는','있어','했지'}
     terms=[]
@@ -14,6 +14,11 @@ def retrieve(db_path, documents, question, max_chars=12000):
         if word in stop: continue
         word=re.sub(r'(에서는|에서|으로|은|는|을|를|이|가|과|와)$','',word) if len(word)>2 else word
         if len(word)>1 and word not in terms: terms.append(word)
+    return terms
+
+
+def retrieve(db_path, documents, question, max_chars=12000):
+    terms=search_terms(question)
     candidates=[]
     with closing(sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=ro',uri=True)) as db:
         db.row_factory=sqlite3.Row
