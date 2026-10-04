@@ -17,13 +17,14 @@ def search_terms(question):
     return terms
 
 
-def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=()):
+def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(), since=None):
     terms=search_terms(question)
     related=set(related_file_ids)
     candidates=[]
     with closing(sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=ro',uri=True)) as db:
         db.row_factory=sqlite3.Row
-        metadata={r['id']:dict(r) for r in db.execute('SELECT id,original_filename,sha256,uploaded_at FROM files')}
+        metadata={r['id']:dict(r) for r in db.execute('''SELECT id,original_filename,sha256,uploaded_at FROM files
+            WHERE ? IS NULL OR julianday(uploaded_at)>=julianday(?)''',(since,since))}
         def add(file_id,page,text,label):
             f=metadata.get(file_id)
             if not f or not text.strip(): return

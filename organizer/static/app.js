@@ -11,7 +11,7 @@ async function loadFiles(append=false){if($('search-kind').value==='messages')re
  d.files.forEach(f=>{const b=node('button',undefined,'file');b.dataset.id=f.id;b.classList.toggle('selected',selected?.id===f.id);b.setAttribute('aria-label',f.original_filename+' 열기');b.append(node('span',f.original_filename.split('.').pop().slice(0,5).toUpperCase(),'file-icon'));const info=node('span',undefined,'file-info');info.append(node('span',f.original_filename,'filename'));info.append(node('span',f.discord_channel+' · '+size(f.file_size_bytes),'file-meta'));const meta=node('span',(statusNames[f.content_status]||'원본으로 보기')+' · '+String(f.uploaded_at).slice(0,10),'file-meta');if(f.version>1)meta.append(node('span','v'+f.version,'badge'));if(f.duplicate_type==='exact_duplicate')meta.append(node('span','중복','badge'));info.append(meta);b.append(info);b.onclick=()=>openFile(f.id);$('files').append(b);});
  $('count').textContent=$('files').children.length+' / '+d.total+'개';$('list-message').textContent=$('files').children.length?'':'검색된 자료가 없어요. 다른 단어로 찾아보세요.';offset+=d.files.length;$('more').hidden=!d.more;
  }catch(e){if(seq===searching)$('list-message').textContent=e.message;}}
-function tab(ai){$('document').hidden=ai||!selected;$('welcome').hidden=ai||Boolean(selected);$('ai-panel').hidden=!ai;document.querySelector('.reader').classList.add('open');if(ai){setSidebar(false);usage();document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});}}
+function tab(ai){$('weekly-panel').hidden=true;$('document').hidden=ai||!selected;$('welcome').hidden=ai||Boolean(selected);$('ai-panel').hidden=!ai;document.querySelector('.reader').classList.add('open');if(ai){setSidebar(false);usage();document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});}}
 
 async function openFile(id,sourcePage=null){setSidebar(false);const seq=++generation;selected=null;$('welcome').hidden=true;$('document').hidden=false;document.querySelector('.reader').classList.add('open');document.querySelector('.workspace').classList.add('reading');$('doc-title').textContent='자료를 여는 중…';$('pages').replaceChildren();$('doc-channel').textContent='';$('doc-meta').textContent='';$('download').hidden=true;$('drive-view').hidden=true;$('drive-view').removeAttribute('href');$('partial').hidden=true;tab(false);$('document').hidden=false;$('welcome').hidden=true;document.querySelectorAll('.file').forEach(e=>e.classList.toggle('selected',e.dataset.id===String(id)));
  try{const f=await api('files/'+id+(sourcePage?'?source_page='+encodeURIComponent(sourcePage):''));if(seq!==generation)return;selected=f;$('doc-title').textContent=f.original_filename;$('doc-channel').textContent=f.discord_channel;$('doc-meta').textContent=size(f.file_size_bytes)+' · '+String(f.uploaded_at).slice(0,10)+' · 자료 #'+f.id;$('download').href='/library/files/'+id+'/download';$('download').hidden=false;if(f.drive_url){$('drive-view').href=f.drive_url;$('drive-view').hidden=false;}$('partial').hidden=!f.partial;
@@ -69,3 +69,29 @@ function openMessage(m){
 $('search-kind').onchange=()=>{const messages=$('search-kind').value==='messages';$('search-days').hidden=!messages;$('search-days-label').hidden=!messages;$('extension').disabled=messages;$('sort').disabled=messages;$('channel').replaceChildren(new Option('모든 채널',''));loadFiles();};
 $('search-days').onchange=()=>{$('message-days').value=$('search-days').value;loadFiles();};
 $('message-days').onchange=()=>{$('search-days').value=$('message-days').value;if($('search-kind').value==='messages')loadFiles();};
+
+let weeklyBusy=false;
+function weeklyResult(r){
+ $('weekly-result').hidden=!r;if(!r)return;
+ $('weekly-date').textContent='정리 시각: '+new Date(r.generated_at).toLocaleString('ko-KR')+' · 파일 '+r.matched_files+'개 / 대화 '+r.matched_messages+'개 참고';
+ $('weekly-answer').textContent=r.answer;$('weekly-sources').replaceChildren();
+ r.sources.forEach(s=>{if(s.kind==='message'){
+  const a=node('a','['+s.id+'] '+s.label,'download');
+  if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(s.url||'')){a.href=s.url;a.target='_blank';a.rel='noopener noreferrer';}
+  $('weekly-sources').append(a);
+ }else{const b=node('button','['+s.id+'] '+s.label,'secondary');b.onclick=()=>openFile(s.file_id,s.page);$('weekly-sources').append(b);}});
+}
+async function openWeekly(){
+ ++generation;setSidebar(false);$('welcome').hidden=true;$('document').hidden=true;$('ai-panel').hidden=true;$('weekly-panel').hidden=false;
+ $('weekly-status').textContent='저장된 정리와 최근 자료를 불러오고 있어요…';
+ try{const r=await api('weekly');weeklyResult(r.saved);$('weekly-status').textContent=r.saved?'':'저장된 정리가 없습니다. 버튼을 눌러 만들어 보세요.';
+ $('weekly-files').replaceChildren();r.files.forEach(f=>{const b=node('button',f.original_filename,'file');b.onclick=()=>openFile(f.id);$('weekly-files').append(b);});
+ $('weekly-messages').replaceChildren();r.messages.forEach(m=>{const b=node('button',m.author_name+' · '+m.content.slice(0,100),'file');b.onclick=()=>openMessage(m);$('weekly-messages').append(b);});
+ }catch(e){$('weekly-status').textContent=e.message;}
+}
+$('weekly-open').onclick=openWeekly;
+$('weekly-generate').onclick=async()=>{
+ if(weeklyBusy)return;weeklyBusy=true;$('weekly-generate').disabled=true;$('weekly-status').textContent='최근 7일 자료를 정리하고 있어요…';
+ try{const r=await api('weekly',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:'{}'});weeklyResult(r);$('weekly-status').textContent='정리를 저장했습니다.';}
+ catch(e){$('weekly-status').textContent=e.message;}finally{weeklyBusy=false;$('weekly-generate').disabled=false;usage();}
+};

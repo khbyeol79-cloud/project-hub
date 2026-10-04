@@ -106,6 +106,30 @@ class WebConversationTests(unittest.TestCase):
                      (now+timedelta(minutes=minutes)).isoformat(),None,1.0,reply))
             db.execute("INSERT INTO conversation_tombstones VALUES('204')")
 
+    def test_weekly_saved_without_provider_on_read_and_invalidated_on_edit(self):
+        self.prepare()
+        self.assertIsNone(self.client.get('/library/api/weekly').json['saved'])
+        self.ai.run.assert_not_called()
+        r=self.client.post('/library/api/weekly',headers=self.post_headers,json={})
+        self.assertEqual(r.status_code,200)
+        self.ai.run.reset_mock()
+        self.assertEqual(self.client.get('/library/api/weekly').json['saved']['answer'],r.json['answer'])
+        self.ai.run.assert_not_called()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE conversation_messages SET revision=2 WHERE message_id='101'")
+        self.assertIsNone(self.client.get('/library/api/weekly').json['saved'])
+
+    def test_weekly_filters_old_files_and_requires_csrf(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE files SET uploaded_at='2000-01-01'")
+        self.assertEqual(self.client.get('/library/api/weekly').json['files'],[])
+        self.assertEqual(self.client.post('/library/api/weekly',json={}).status_code,403)
+        r=self.client.post('/library/api/weekly',headers=self.post_headers,json={})
+        self.assertEqual(r.status_code,200)
+        self.assertEqual(r.json['matched_files'],0)
+        self.assertTrue(all(s.get('kind')=='message' for s in self.ai.run.call_args.args[1]))
+
     def test_context_includes_reply_and_neighbors_with_attached_file_without_keyword(self):
         self.context_fixture()
         r=self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'deadline'})

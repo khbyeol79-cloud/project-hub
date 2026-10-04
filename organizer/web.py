@@ -1,7 +1,8 @@
 """Revocable link-access library behind Caddy. Bind only to loopback."""
 from collections import deque
 from contextlib import closing
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+import json
 import hashlib
 import hmac
 import os
@@ -45,6 +46,7 @@ def create_app(config=None, ai=None):
     ai_lock = threading.Lock()
     access_lock = threading.Lock()
     access_attempts = deque()
+    weekly_path=Path(app.config['DB_PATH']).parent/'weekly-summary.json'
 
     def connect():
         db = sqlite3.connect(Path(app.config['DB_PATH']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
@@ -292,6 +294,58 @@ def create_app(config=None, ai=None):
         if not url.startswith(app.config['PUBLIC_ORIGIN']+'/library/#key='):
             abort(503)
         return jsonify(url=url)
+
+    def weekly_data():
+        since=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
+        with closing(connect()) as db:
+            files=[dict(r) for r in db.execute('''SELECT id,original_filename,uploaded_at FROM files
+                WHERE julianday(uploaded_at)>=julianday(?) ORDER BY julianday(uploaded_at) DESC LIMIT 8''',(since,))]
+        messages=conversations.search(days=7,limit=8)['messages']
+        return since,files,messages
+
+    @app.get('/library/api/weekly')
+    def weekly_get():
+        since,files,messages=weekly_data()
+        saved=None
+        if weekly_path.exists():
+            candidate=json.loads(weekly_path.read_text(encoding='utf-8'))
+            valid=conversations.current(candidate['checks'])
+            with closing(connect()) as db:
+                for fid,sha in candidate['file_hashes'].items():
+                    row=db.execute('SELECT sha256 FROM files WHERE id=?',(fid,)).fetchone()
+                    valid=valid and bool(row and row['sha256']==sha)
+            if valid: saved=candidate['result']
+        return jsonify(files=files,messages=messages,saved=saved,since=since)
+
+    @app.post('/library/api/weekly')
+    def weekly_generate():
+        if ai is None: raise AIError('AI 기능이 아직 준비되지 않았습니다.')
+        if not ai_lock.acquire(blocking=False):
+            return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'),429
+        try:
+            since,_,_=weekly_data()
+            chats=conversations.sources('',7,ai.settings.max_chars//2)
+            sources=retrieve(app.config['DB_PATH'],documents,'',
+                ai.settings.max_chars-sum(len(s['text']) for s in chats),since=since)+chats
+            if not sources: return jsonify(error='최근 7일간 정리할 본문이나 공개 대화가 없습니다.'),422
+            with closing(connect()) as db:
+                hashes={str(s['file_id']):db.execute('SELECT sha256 FROM files WHERE id=?',
+                    (s['file_id'],)).fetchone()['sha256'] for s in sources if 'file_id' in s}
+            result=ai.run('summary',sources,partial=True)
+            if not conversations.current(sources): raise AIError('대화가 변경되었습니다. 다시 정리해 주세요.')
+            result=dict(result,generated_at=datetime.now(timezone.utc).isoformat(),since=since,
+                matched_files=len({s['file_id'] for s in sources if 'file_id' in s}),matched_messages=len(chats))
+            with closing(connect()) as db:
+                for fid,sha in hashes.items():
+                    row=db.execute('SELECT sha256 FROM files WHERE id=?',(fid,)).fetchone()
+                    if not row or row['sha256']!=sha: raise AIError('파일이 변경되었습니다. 다시 정리해 주세요.')
+            snapshot={'result':result,'checks':[{k:v for k,v in s.items() if k!='text'} for s in chats],'file_hashes':hashes}
+            temp=weekly_path.with_suffix('.tmp')
+            fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+            with os.fdopen(fd,'w',encoding='utf-8') as output: json.dump(snapshot,output,ensure_ascii=False)
+            temp.replace(weekly_path)
+            return jsonify(result)
+        finally: ai_lock.release()
 
     @app.post('/library/api/ai')
     def integrated_ai():

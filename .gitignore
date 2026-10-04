@@ -410,3 +410,6 @@ google-ai-service-account.json
 project-hub-ai-state/
 library.env
 library-share-url.txt
+
+weekly-summary.json
+weekly-summary.tmp
