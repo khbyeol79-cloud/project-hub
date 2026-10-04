@@ -34,7 +34,7 @@ def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(),
                 score=sum(3*(t in body)+1*(t in name) for t in terms)
                 if question and file_id not in related and (not terms or not score): continue
                 if file_id in related: score+=2
-                candidates.append((score,f['uploaded_at'] or '',file_id,page,chunk,f"{f['original_filename']} · {label}"))
+                candidates.append((score,f['uploaded_at'] or '',file_id,page,chunk,f"{f['original_filename']} · {label} · 업로드 {str(f['uploaded_at'] or '날짜 미상')[:10]}"))
                 if len(candidates)>500: candidates.sort(reverse=True);del candidates[150:]
         for r in db.execute('''SELECT p.file_id,p.page,p.body FROM content_pages p
             JOIN content_documents d ON d.file_id=p.file_id JOIN files f ON f.id=p.file_id

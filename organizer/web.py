@@ -21,6 +21,7 @@ from .__main__ import read_document
 from .documents import Documents, SUFFIXES
 from .retrieval import retrieve
 from .conversations import Conversations
+from . import versions
 
 ROOT = Path(__file__).resolve().parent
 FIELDS = '''f.id, f.original_filename, f.discord_channel, f.discord_channel_id,
@@ -136,7 +137,7 @@ def create_app(config=None, ai=None):
         query = request.args.get('q', '').strip()[:100]
         channel = request.args.get('channel', '')[:100]
         extension = request.args.get('extension','').lower()[:100]
-        orders={'date_desc':'f.uploaded_at DESC, f.id DESC','date_asc':'f.uploaded_at ASC, f.id ASC',
+        orders={'date_desc':'COALESCE(julianday(f.uploaded_at),0) DESC, f.id DESC','date_asc':'COALESCE(julianday(f.uploaded_at),0) ASC, f.id ASC',
                 'name_asc':'f.original_filename COLLATE NOCASE ASC, f.id ASC',
                 'name_desc':'f.original_filename COLLATE NOCASE DESC, f.id DESC'}
         order=orders.get(request.args.get('sort','date_desc'))
@@ -146,6 +147,9 @@ def create_app(config=None, ai=None):
         except ValueError:
             abort(400)
         conditions, params = [], []
+        view=request.args.get('view','all')
+        if view not in {'all','latest'}: abort(400)
+        if view=='latest': conditions.append(versions.LATEST)
         if query:
             condition='''(instr(lower(f.original_filename),lower(?))>0 OR EXISTS
                 (SELECT 1 FROM content_pages p JOIN content_documents x ON x.file_id=p.file_id
@@ -169,8 +173,10 @@ def create_app(config=None, ai=None):
             channels = [dict(r) for r in db.execute('SELECT DISTINCT discord_channel_id AS id, discord_channel AS name FROM files ORDER BY name')]
             extensions=[r[0] for r in db.execute('SELECT DISTINCT file_ext(original_filename) FROM files ORDER BY 1')]
             total=db.execute('SELECT count(*) FROM files f'+where,params).fetchone()[0]
+            relationships={r['id']:versions.info(db,r['id']) for r in rows[:30]}
         items=[dict(r) for r in rows[:30]]
         for item in items:
+            item.update(relationships[item['id']])
             if Path(item['original_filename']).suffix.lower() in SUFFIXES:
                 extra=documents.get(item['id'])
                 if extra: item['content_status']=extra['status']
@@ -200,6 +206,8 @@ def create_app(config=None, ai=None):
             db.execute('BEGIN')
             row = file_row(db, file_id)
             row.pop('local_path')
+            row.update(versions.info(db,file_id))
+            row['related'],row['related_more']=versions.related(db,file_id)
             drive_id=db.execute('SELECT google_drive_file_id FROM files WHERE id=?',(file_id,)).fetchone()[0]
             row['drive_url']=f'https://drive.google.com/file/d/{drive_id}/view' if isinstance(drive_id,str) and re.fullmatch(r'[A-Za-z0-9_-]+',drive_id) else None
             row['drive_preview_url']=row['drive_url'].removesuffix('/view')+'/preview' if row['drive_url'] else None

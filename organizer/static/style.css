@@ -17,3 +17,5 @@
 #global-ai{margin-left:auto;margin-right:8px}#sidebar-ai{margin-bottom:18px;flex-shrink:0}#ai-panel{min-height:500px}@media(max-width:800px){header{gap:6px}#global-ai{margin-right:0}.brand small{font-size:9px}.share-button{padding:7px}.brand{font-size:14px}}
 
 #weekly-panel{padding:24px}#weekly-answer{white-space:pre-wrap;line-height:1.85;overflow-wrap:anywhere}#weekly-sources{display:flex;flex-wrap:wrap;gap:8px}header{flex-wrap:wrap}
+
+#file-versions{margin:0 24px 16px}#file-versions summary{cursor:pointer;padding:12px 0}#file-versions .file{white-space:normal;overflow-wrap:anywhere}
