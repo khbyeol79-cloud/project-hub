@@ -46,7 +46,8 @@ def create_app(config=None, ai=None):
     ai_lock = threading.Lock()
     access_lock = threading.Lock()
     access_attempts = deque()
-    weekly_path=Path(app.config['DB_PATH']).parent/'weekly-summary.json'
+    weekly_folder=getattr(ai.settings,'state',Path(app.config['DB_PATH']).parent) if ai else Path(app.config['DB_PATH']).parent
+    weekly_path=Path(weekly_folder)/'weekly-summary.json'
 
     def connect():
         db = sqlite3.connect(Path(app.config['DB_PATH']).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
