@@ -17,8 +17,9 @@ def search_terms(question):
     return terms
 
 
-def retrieve(db_path, documents, question, max_chars=12000):
+def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=()):
     terms=search_terms(question)
+    related=set(related_file_ids)
     candidates=[]
     with closing(sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=ro',uri=True)) as db:
         db.row_factory=sqlite3.Row
@@ -30,7 +31,8 @@ def retrieve(db_path, documents, question, max_chars=12000):
                 chunk=text[start:start+1200]
                 body=chunk.casefold(); name=f['original_filename'].casefold()
                 score=sum(3*(t in body)+1*(t in name) for t in terms)
-                if question and (not terms or not score): continue
+                if question and file_id not in related and (not terms or not score): continue
+                if file_id in related: score+=2
                 candidates.append((score,f['uploaded_at'] or '',file_id,page,chunk,f"{f['original_filename']} · {label}"))
                 if len(candidates)>500: candidates.sort(reverse=True);del candidates[150:]
         for r in db.execute('''SELECT p.file_id,p.page,p.body FROM content_pages p

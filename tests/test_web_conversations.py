@@ -91,3 +91,42 @@ class WebConversationTests(unittest.TestCase):
         r=self.client.get('/library/api/messages?channels=999')
         self.assertNotIn('103',[m['message_id'] for m in r.json['messages']])
         self.assertEqual(self.client.post('/library/api/ai',json={'task':'ask','question':'sensor'}).status_code,403)
+
+    def context_fixture(self):
+        self.prepare()
+        now=datetime.now(timezone.utc)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('ALTER TABLE conversation_messages ADD COLUMN reply_message_id TEXT')
+            db.execute("UPDATE conversation_messages SET content='deadline',search_content='deadline',created_at=?,reply_message_id='201' WHERE message_id='101'",(now.isoformat(),))
+            for mid,channel,minutes,reply in [('201','123',-60,None),('202','123',1,'101'),
+                    ('203','999',1,'101'),('204','123',2,None),('205','123',30,None),
+                    ('206','123',-1,None),('207','456',1,'101')]:
+                db.execute('INSERT INTO conversation_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (mid,'1',channel,None,'plc','팀원','금요일까지 마무리','금요일까지 마무리',
+                     (now+timedelta(minutes=minutes)).isoformat(),None,1.0,reply))
+            db.execute("INSERT INTO conversation_tombstones VALUES('204')")
+
+    def test_context_includes_reply_and_neighbors_with_attached_file_without_keyword(self):
+        self.context_fixture()
+        r=self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'deadline'})
+        self.assertEqual(r.status_code,200)
+        sources=self.ai.run.call_args.args[1]
+        ids={s['message_id'] for s in sources if s.get('kind')=='message'}
+        self.assertEqual(ids,{'101','201','202','206'})
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        self.assertEqual(len(ids),len([s for s in sources if s.get('kind')=='message']))
+        self.assertLessEqual(sum(len(s['text']) for s in sources),12000)
+
+    def test_context_respects_date_guild_and_revision_checks(self):
+        self.context_fixture()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE conversation_messages SET created_at=? WHERE message_id=?',
+                       ((datetime.now(timezone.utc)-timedelta(days=10)).isoformat(),'201'))
+            db.execute("UPDATE conversation_messages SET guild_id='2' WHERE message_id='206'")
+        c=Conversations(self.db,['123','555'])
+        sources=c.sources('deadline',days=7)
+        self.assertEqual({s['message_id'] for s in sources},{'101','202'})
+        self.assertTrue(c.current(sources))
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE conversation_messages SET revision=2 WHERE message_id='202'")
+        self.assertFalse(c.current(sources))

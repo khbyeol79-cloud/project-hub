@@ -307,8 +307,10 @@ def create_app(config=None, ai=None):
         try:
             needle=question if data['task']=='ask' else ''
             chat_sources=conversations.sources(needle,days,ai.settings.max_chars//2)
+            related_files={fid for source in chat_sources for fid in source.get('attachment_ids',[])}
             sources=retrieve(app.config['DB_PATH'],documents,needle,
-                             ai.settings.max_chars-sum(len(s['text']) for s in chat_sources)) + chat_sources
+                             ai.settings.max_chars-sum(len(s['text']) for s in chat_sources),
+                             related_file_ids=related_files) + chat_sources
             if not sources:
                 return jsonify(answer='관련 파일 본문이나 공개된 대화를 찾지 못했습니다. 구체적인 용어로 질문해 주세요.',sources=[],partial=True,cached=False,matched_files=0,matched_messages=0)
             result=ai.run(data['task'],sources,question,True)

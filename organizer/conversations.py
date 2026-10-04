@@ -68,25 +68,69 @@ class Conversations:
                          categories.get(r['category'],r['category'])+(' · 게시글 '+r['channel_id'][-4:] if r['parent_id'] else '')} for r in channel_rows]
             return {'messages': messages, 'more': len(rows)>limit, 'channels': channels}
 
+    def context(self, anchor, days=0):
+        """Bounded same-channel context; never follow a reply across permission scopes."""
+        if not ({anchor['channel_id'],anchor['parent_id']} & set(self.channels)):
+            return []
+        with closing(self.connect()) as db:
+            columns={r[1] for r in db.execute('PRAGMA table_info(conversation_messages)')}
+            scope="m.guild_id=? AND m.channel_id=? AND trim(m.content)<>''"
+            args=[anchor['guild_id'],anchor['channel_id']]
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_tombstones'").fetchone():
+                scope+=' AND NOT EXISTS (SELECT 1 FROM conversation_tombstones t WHERE t.message_id=m.message_id)'
+            if days:
+                scope+=' AND julianday(m.created_at)>=julianday(?)'
+                args.append((datetime.now(timezone.utc)-timedelta(days=days)).isoformat())
+            result=[]
+            if 'reply_message_id' in columns:
+                result.extend(db.execute('SELECT m.* FROM conversation_messages m WHERE '+scope+''' AND
+                    (m.message_id=(SELECT reply_message_id FROM conversation_messages WHERE message_id=?)
+                     OR m.reply_message_id=?) ORDER BY julianday(m.created_at) DESC LIMIT 3''',
+                    [*args,anchor['message_id'],anchor['message_id']]).fetchall())
+            for operator,order in [('<','DESC'),('>','ASC')]:
+                result.extend(db.execute('SELECT m.* FROM conversation_messages m WHERE '+scope+
+                    f' AND julianday(m.created_at){operator}julianday(?) AND abs(julianday(m.created_at)-julianday(?))<=15.0/1440'
+                    f' ORDER BY julianday(m.created_at) {order},m.message_id {order} LIMIT 2',
+                    [*args,anchor['created_at'],anchor['created_at']]).fetchall())
+            output=[]
+            for row in result:
+                item=dict(row)
+                item['url']=discord_url(row['guild_id'],row['channel_id'],row['message_id'])
+                item['files']=[dict(f) for f in db.execute('''SELECT id,original_filename FROM files
+                    WHERE discord_message_id=? AND discord_guild_id=? AND discord_channel_id=? ORDER BY id LIMIT 20''',
+                    (row['message_id'],row['guild_id'],row['channel_id']))]
+                output.append(item)
+            return output
+
     def sources(self, question, days=0, max_chars=6000):
         from .retrieval import search_terms
         terms = search_terms(question)
         if question and not terms:
             return []
         rows = self.search(days=days,limit=6,terms=terms)['messages']
-        result=[]
-        for row in rows:
-            if max_chars<=0: break
+        # Keep direct hits first, then round-robin context so one busy thread cannot take every slot.
+        candidates=[(row,'검색된 대화') for row in rows]
+        groups=[self.context(row,days) for row in rows] if question else []
+        for index in range(max((len(g) for g in groups),default=0)):
+            for anchor,group in zip(rows,groups):
+                if index<len(group): candidates.append((group[index],f"대화 {anchor['message_id']}의 주변·답글 맥락"))
+        result=[];seen=set()
+        for row,relation in candidates:
+            if max_chars<100 or len(result)>=12: break
+            if row['message_id'] in seen: continue
+            seen.add(row['message_id'])
             label=f"{row['category']} 대화 · {row['author_name']} · {row['created_at']}"
             content=row['content']
             # Include the matched region of a long message, not just its beginning.
             positions=[content.casefold().find(t) for t in terms if t in content.casefold()]
             start=max(0,min(positions)-200) if positions else 0
-            text=(f'대화: {label}\n'+content[start:start+1200])[:max_chars]
+            attachments=' · '.join(f['original_filename'][:100] for f in row['files'][:5])
+            text=(f"대화: {label}\n메시지 ID: {row['message_id']} · {relation}\n"+
+                  (f'첨부: {attachments}\n' if attachments else '')+content[start:start+500])[:max_chars]
             if not text.strip(): continue
             result.append({'kind':'message','message_id':row['message_id'],'guild_id':row['guild_id'],
                 'channel_id':row['channel_id'],'revision':row['revision'],'url':row['url'],
-                'label':label,'text':text})
+                'label':label,'text':text,'attachment_ids':[f['id'] for f in row['files']]})
             max_chars-=len(text)
         return result
 
