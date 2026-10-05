@@ -23,7 +23,7 @@ class Conversations:
         db.row_factory = sqlite3.Row
         return db
 
-    def search(self, query='', channel='', days=0, offset=0, limit=20, terms=None):
+    def search(self, query='', channel='', days=0, offset=0, limit=20, terms=None, message_id=None):
         if not self.channels:
             return {'messages': [], 'more': False, 'channels': []}
         with closing(self.connect()) as db:
@@ -36,7 +36,8 @@ class Conversations:
             if 'conversation_tombstones' in tables:
                 scope += ' AND NOT EXISTS (SELECT 1 FROM conversation_tombstones t WHERE t.message_id=m.message_id)'
             channel_rows = db.execute('SELECT DISTINCT m.channel_id,m.parent_id,m.category FROM conversation_messages m WHERE '+scope, params).fetchall()
-            where = scope + " AND trim(m.content)<>''"
+            where = scope + (" AND trim(m.content)<>''" if message_id is None else ' AND m.message_id=?')
+            if message_id is not None: params.append(message_id)
             if channel:
                 where += ' AND (m.channel_id=? OR m.parent_id=?)'
                 params.extend([channel, channel])

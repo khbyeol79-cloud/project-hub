@@ -106,6 +106,45 @@ class WebConversationTests(unittest.TestCase):
                      (now+timedelta(minutes=minutes)).isoformat(),None,1.0,reply))
             db.execute("INSERT INTO conversation_tombstones VALUES('204')")
 
+    def test_message_deep_link_obeys_scope_and_deletion_even_with_empty_text(self):
+        self.prepare()
+        self.assertEqual(self.client.get('/library/api/messages/101').json['message_id'],'101')
+        self.assertEqual(self.client.get('/library/api/messages/103').status_code,404)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE conversation_messages SET content='' WHERE message_id='101'")
+        self.assertEqual(self.client.get('/library/api/messages/101').json['files'][0]['id'],1)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("INSERT INTO conversation_tombstones VALUES('101')")
+        self.assertEqual(self.client.get('/library/api/messages/101').status_code,404)
+        self.assertEqual(self.client.get('/library/api/messages/bad').status_code,404)
+
+    def test_processing_counts_stale_content_and_health_without_raw_errors(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.executescript('''ALTER TABLE files ADD COLUMN upload_status TEXT;
+                UPDATE files SET upload_status='failed';
+                UPDATE content_documents SET source_sha256='stale';
+                CREATE TABLE health_checks(check_key TEXT,failures INTEGER,last_checked_at TEXT,last_error TEXT);''')
+            for cid in ['123','555']:
+                for prefix in ['history:','messages:']:
+                    db.execute('INSERT INTO health_checks VALUES(?,?,?,?)',
+                        (prefix+cid,0,datetime.now(timezone.utc).isoformat(),'private error sentinel'))
+        result=self.client.get('/library/api/processing')
+        self.assertEqual(result.json['content'],{'pending':1})
+        self.assertEqual(result.json['drive'],{'failed':1})
+        self.assertEqual(result.json['collection'],'healthy')
+        self.assertNotIn('sentinel',result.text)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE health_checks SET failures=1 WHERE check_key='history:123'")
+        self.assertEqual(self.client.get('/library/api/processing').json['collection'],'attention')
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE health_checks SET failures=0,last_checked_at='2000-01-01 00:00:00'")
+        self.assertEqual(self.client.get('/library/api/processing').json['collection'],'stale')
+        self.assertEqual(self.client.get('/library/api/files/1').json['upload_status'],'failed')
+
+    def test_processing_endpoint_requires_library_access(self):
+        self.assertEqual(self.app.test_client().get('/library/api/processing').status_code,401)
+
     def test_ai_channel_scopes_files_messages_and_forum_parent(self):
         self.prepare()
         self.client.post('/library/api/ai',headers=self.post_headers,

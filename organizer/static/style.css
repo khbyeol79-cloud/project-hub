@@ -21,3 +21,5 @@
 #file-versions{margin:0 24px 16px}#file-versions summary{cursor:pointer;padding:12px 0}#file-versions .file{white-space:normal;overflow-wrap:anywhere}
 
 .search-excerpt{display:block;white-space:normal;overflow-wrap:anywhere;line-height:1.6;font-size:.85rem;color:var(--ink);margin-top:6px}
+
+#processing-box{margin:16px 0;padding:10px;border:1px solid var(--line);border-radius:8px}#processing-box summary{cursor:pointer}#processing-status{white-space:pre-line;line-height:1.7;font-size:.85rem}

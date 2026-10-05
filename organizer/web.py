@@ -215,6 +215,19 @@ def create_app(config=None, ai=None):
         result['enabled']=bool(conversations.channels)
         return jsonify(result)
 
+    @app.get('/library/api/messages/<message_id>')
+    def message_detail(message_id):
+        if not re.fullmatch(r'[0-9]{1,20}',message_id): abort(404)
+        rows=conversations.search(message_id=message_id,limit=1)['messages']
+        if not rows: abort(404)
+        return jsonify(rows[0])
+
+    @app.get('/library/api/processing')
+    def processing_status():
+        from .processing import snapshot
+        with closing(connect()) as db:
+            return jsonify(snapshot(db,documents.cache,app.config['MESSAGE_CHANNELS']))
+
     def file_row(db, file_id):
         row = db.execute('SELECT ' + FIELDS + ', f.local_path FROM files f LEFT JOIN content_documents d ON d.file_id=f.id WHERE f.id=?', (file_id,)).fetchone()
         if not row:
@@ -227,6 +240,9 @@ def create_app(config=None, ai=None):
             db.execute('BEGIN')
             row = file_row(db, file_id)
             row.pop('local_path')
+            columns={c[1] for c in db.execute('PRAGMA table_info(files)')}
+            raw=db.execute('SELECT upload_status FROM files WHERE id=?',(file_id,)).fetchone()[0] if 'upload_status' in columns else 'unknown'
+            row['upload_status']=raw if raw in {'uploaded','pending','failed','needs_review'} else 'unknown'
             row.update(versions.info(db,file_id))
             row['related'],row['related_more']=versions.related(db,file_id)
             drive_id=db.execute('SELECT google_drive_file_id FROM files WHERE id=?',(file_id,)).fetchone()[0]
