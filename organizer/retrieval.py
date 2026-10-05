@@ -17,14 +17,17 @@ def search_terms(question):
     return terms
 
 
-def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(), since=None):
+def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(), since=None, channel=''):
     terms=search_terms(question)
     related=set(related_file_ids)
     candidates=[]
     with closing(sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=ro',uri=True)) as db:
         db.row_factory=sqlite3.Row
+        has_parent=any(r[1]=='discord_parent_channel_id' for r in db.execute('PRAGMA table_info(files)'))
+        clause=' AND (?=\'\' OR discord_channel_id=?'+(' OR discord_parent_channel_id=?' if has_parent else '')+')'
         metadata={r['id']:dict(r) for r in db.execute('''SELECT id,original_filename,sha256,uploaded_at FROM files
-            WHERE ? IS NULL OR julianday(uploaded_at)>=julianday(?)''',(since,since))}
+            WHERE (? IS NULL OR julianday(uploaded_at)>=julianday(?))'''+clause,
+            [since,since,channel,channel]+([channel] if has_parent else []))}
         def add(file_id,page,text,label):
             f=metadata.get(file_id)
             if not f or not text.strip(): return

@@ -19,3 +19,5 @@
 #weekly-panel{padding:24px}#weekly-answer{white-space:pre-wrap;line-height:1.85;overflow-wrap:anywhere}#weekly-sources{display:flex;flex-wrap:wrap;gap:8px}header{flex-wrap:wrap}
 
 #file-versions{margin:0 24px 16px}#file-versions summary{cursor:pointer;padding:12px 0}#file-versions .file{white-space:normal;overflow-wrap:anywhere}
+
+.search-excerpt{display:block;white-space:normal;overflow-wrap:anywhere;line-height:1.6;font-size:.85rem;color:var(--ink);margin-top:6px}

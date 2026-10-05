@@ -144,9 +144,14 @@ def create_app(config=None, ai=None):
         if order is None: abort(400)
         try:
             offset = max(0, min(int(request.args.get('offset', '0')), 100000))
+            days=int(request.args.get('days','0'))
+            if days not in {0,7,30}: raise ValueError()
         except ValueError:
             abort(400)
         conditions, params = [], []
+        if days:
+            conditions.append('julianday(f.uploaded_at)>=julianday(?)')
+            params.append((datetime.now(timezone.utc)-timedelta(days=days)).isoformat())
         view=request.args.get('view','all')
         if view not in {'all','latest'}: abort(400)
         if view=='latest': conditions.append(versions.LATEST)
@@ -161,8 +166,10 @@ def create_app(config=None, ai=None):
                 params.extend([file_id,sha])
             conditions.append(condition+')')
         if channel:
-            conditions.append('f.discord_channel_id=?')
-            params.append(channel)
+            with closing(connect()) as db:
+                parent=any(r[1]=='discord_parent_channel_id' for r in db.execute('PRAGMA table_info(files)'))
+            conditions.append('(f.discord_channel_id=?'+(' OR f.discord_parent_channel_id=?' if parent else '')+')')
+            params.extend([channel,channel] if parent else [channel])
         if extension:
             conditions.append('file_ext(f.original_filename)=?')
             params.append(extension)
@@ -174,12 +181,26 @@ def create_app(config=None, ai=None):
             extensions=[r[0] for r in db.execute('SELECT DISTINCT file_ext(original_filename) FROM files ORDER BY 1')]
             total=db.execute('SELECT count(*) FROM files f'+where,params).fetchone()[0]
             relationships={r['id']:versions.info(db,r['id']) for r in rows[:30]}
+            previews={}
+            if query:
+                for r in rows[:30]:
+                    hit=db.execute('''SELECT p.body FROM content_pages p JOIN content_documents d ON d.file_id=p.file_id
+                        JOIN files f ON f.id=p.file_id WHERE f.id=? AND f.sha256=d.source_sha256
+                        AND d.status IN ('indexed','partial') AND instr(p.search_body,?)>0 ORDER BY p.page LIMIT 1''',
+                        (r['id'],query.casefold())).fetchone()
+                    if hit: previews[r['id']]=hit[0]
         items=[dict(r) for r in rows[:30]]
         for item in items:
             item.update(relationships[item['id']])
+            body=previews.get(item['id'],'')
             if Path(item['original_filename']).suffix.lower() in SUFFIXES:
                 extra=documents.get(item['id'])
-                if extra: item['content_status']=extra['status']
+                if extra:
+                    item['content_status']=extra['status']
+                    if query and not body:
+                        body=next((p['text'] for p in extra['pages'] if query.casefold() in p['text'].casefold()),'')
+            start=max(0,body.casefold().find(query.casefold())-70) if body and query else 0
+            item['excerpt']=('…' if start else '')+body[start:start+220] if body else ''
         return jsonify(files=items, more=len(rows)>30, channels=channels,extensions=extensions,total=total)
 
     @app.get('/library/api/messages')
@@ -364,16 +385,19 @@ def create_app(config=None, ai=None):
         if not isinstance(question,str) or len(question)>1000 or (data['task']=='ask' and not question.strip()): abort(400)
         days=data.get('days',0)
         if type(days) is not int or days not in {0,7,30}: abort(400)
+        channel=data.get('channel','')
+        if not isinstance(channel,str) or (channel and not re.fullmatch(r'[0-9]{1,20}',channel)): abort(400)
         if ai is None: raise AIError('AI 기능이 아직 준비되지 않았습니다.')
         if not ai_lock.acquire(blocking=False):
             return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'),429
         try:
             needle=question if data['task']=='ask' else ''
-            chat_sources=conversations.sources(needle,days,ai.settings.max_chars//2)
+            chat_sources=conversations.sources(needle,days,ai.settings.max_chars//2,channel=channel)
             related_files={fid for source in chat_sources for fid in source.get('attachment_ids',[])}
             sources=retrieve(app.config['DB_PATH'],documents,needle,
                              ai.settings.max_chars-sum(len(s['text']) for s in chat_sources),
-                             related_file_ids=related_files) + chat_sources
+                             related_file_ids=related_files,channel=channel,
+                             since=(datetime.now(timezone.utc)-timedelta(days=days)).isoformat() if days else None) + chat_sources
             if not sources:
                 return jsonify(answer='관련 파일 본문이나 공개된 대화를 찾지 못했습니다. 구체적인 용어로 질문해 주세요.',sources=[],partial=True,cached=False,matched_files=0,matched_messages=0)
             result=ai.run(data['task'],sources,question,True)

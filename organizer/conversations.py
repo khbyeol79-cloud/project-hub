@@ -66,6 +66,10 @@ class Conversations:
             categories={'common':'공통','plc':'PLC','vision':'PC','3d_model':'기구제작','meeting':'게시물'}
             channels = [{'id': r['channel_id'], 'name': names.get(r['channel_id']) or
                          categories.get(r['category'],r['category'])+(' · 게시글 '+r['channel_id'][-4:] if r['parent_id'] else '')} for r in channel_rows]
+            parents={r['parent_id']:r['category'] for r in channel_rows if r['parent_id'] in self.channels}
+            existing={c['id'] for c in channels}
+            channels.extend({'id':pid,'name':categories.get(category,category)+' · 전체 게시글'}
+                            for pid,category in parents.items() if pid not in existing)
             return {'messages': messages, 'more': len(rows)>limit, 'channels': channels}
 
     def context(self, anchor, days=0):
@@ -102,12 +106,12 @@ class Conversations:
                 output.append(item)
             return output
 
-    def sources(self, question, days=0, max_chars=6000):
+    def sources(self, question, days=0, max_chars=6000, channel=''):
         from .retrieval import search_terms
         terms = search_terms(question)
         if question and not terms:
             return []
-        rows = self.search(days=days,limit=6,terms=terms)['messages']
+        rows = self.search(days=days,limit=6,terms=terms,channel=channel)['messages']
         # Keep direct hits first, then round-robin context so one busy thread cannot take every slot.
         candidates=[(row,'검색된 대화') for row in rows]
         groups=[self.context(row,days) for row in rows] if question else []

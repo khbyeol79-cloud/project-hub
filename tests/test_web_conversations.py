@@ -106,6 +106,52 @@ class WebConversationTests(unittest.TestCase):
                      (now+timedelta(minutes=minutes)).isoformat(),None,1.0,reply))
             db.execute("INSERT INTO conversation_tombstones VALUES('204')")
 
+    def test_ai_channel_scopes_files_messages_and_forum_parent(self):
+        self.prepare()
+        self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':'123'})
+        sources=self.ai.run.call_args.args[1]
+        self.assertEqual({s['message_id'] for s in sources if s.get('kind')=='message'},{'101'})
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute('ALTER TABLE files ADD COLUMN discord_parent_channel_id TEXT')
+            db.execute("UPDATE files SET discord_channel_id='456',discord_parent_channel_id='555'")
+        self.assertEqual(self.client.get('/library/api/files?channel=555').json['total'],1)
+        self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':'555'})
+        sources=self.ai.run.call_args.args[1]
+        self.assertEqual({s['message_id'] for s in sources if s.get('kind')=='message'},{'102'})
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        self.assertEqual(self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':['123']}).status_code,400)
+
+    def test_ai_period_filters_files_and_excludes_empty_scope_without_call(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE files SET uploaded_at='2000-01-01'")
+        self.assertEqual(self.client.get('/library/api/files?days=7').json['total'],0)
+        self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','days':7})
+        self.assertTrue(all(s.get('kind')=='message' for s in self.ai.run.call_args.args[1]))
+        self.ai.run.reset_mock()
+        r=self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':'777'})
+        self.assertEqual(r.status_code,200)
+        self.ai.run.assert_not_called()
+        self.assertEqual(self.client.get('/library/api/files?days=bad').status_code,400)
+
+    def test_file_excerpt_uses_current_body_and_query_region(self):
+        self.prepare()
+        body='before '*100+'sensor <script>plain text</script> after'
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute('UPDATE content_pages SET body=?,search_body=?',(body,body.casefold()))
+        excerpt=self.client.get('/library/api/files?q=sensor').json['files'][0]['excerpt']
+        self.assertIn('sensor',excerpt)
+        self.assertLessEqual(len(excerpt),221)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE content_documents SET source_sha256='stale'")
+        self.assertEqual(self.client.get('/library/api/files?q=sample').json['files'][0]['excerpt'],'')
+
     def test_weekly_saved_without_provider_on_read_and_invalidated_on_edit(self):
         self.prepare()
         self.assertIsNone(self.client.get('/library/api/weekly').json['saved'])
