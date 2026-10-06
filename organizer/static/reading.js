@@ -29,7 +29,20 @@ function renderReading(f,preview){
  const hasText=Boolean(f.reading_blocks?.length||f.pages.length);if(!hasText)article.append(node('p','읽기용 텍스트가 없어 원본 보기로 표시합니다.'));
  const originalPanel=node('div');originalPanel.id='original-reading';let loaded=false;
  function show(mode){article.hidden=!mode;originalPanel.hidden=mode;easy.setAttribute('aria-pressed',String(mode));original.setAttribute('aria-pressed',String(!mode));zoom.hidden=!mode;
-  if(!mode&&!loaded){loaded=true;if(preview){const frame=node('iframe');frame.className='document-preview';frame.title=f.original_filename+' 원본 미리보기';frame.referrerPolicy='no-referrer';if(f.html_preview)frame.setAttribute('sandbox','');frame.src=preview;originalPanel.append(frame);}else if(f.image_preview){const img=node('img');img.className='image-preview';img.src='/library/files/'+f.id+'/preview';img.alt=f.original_filename;originalPanel.append(img);}else originalPanel.append(node('p','위의 원본 다운로드로 확인해 주세요.'));}
+  if(!mode&&!loaded){loaded=true;
+   if(f.text_preview){
+    const message=node('p','원본을 불러오고 있어요…','notice');originalPanel.append(message);
+    api('files/'+f.id+'/text-preview').then(r=>{message.remove();originalPanel.append(node('pre',r.text,'original-text'));}).catch(e=>{message.textContent=e.message;});
+   }else if(f.image_preview){const img=node('img');img.className='image-preview';img.src='/library/files/'+f.id+'/preview';img.alt=f.original_filename;originalPanel.append(img);
+   }else if(preview){
+    if(f.pdf_preview){const link=node('a','PDF 원본을 새 창에서 열기 ↗','download');link.href=preview;link.target='_blank';link.rel='noopener noreferrer';originalPanel.append(link);}
+    if(!f.html_preview&&!f.pdf_preview&&f.drive_url){
+     const notice=node('p','미리보기가 차단되거나 표시되지 않으면 새 창에서 원본을 열어주세요.','notice');
+     const link=node('a','Google Drive에서 원본 열기 ↗','download');link.href=f.drive_url;link.target='_blank';link.rel='noopener noreferrer';originalPanel.append(notice,link);
+    }
+    const frame=node('iframe');frame.className='document-preview';frame.title=f.original_filename+' 원본 미리보기';frame.referrerPolicy='no-referrer';if(f.html_preview)frame.setAttribute('sandbox','');frame.src=preview;originalPanel.append(frame);
+   }else originalPanel.append(node('p','위의 원본 다운로드로 확인해 주세요.'));
+  }
  }
  easy.onclick=()=>show(true);original.onclick=()=>show(false);zoom.onclick=()=>{const big=article.classList.toggle('large-text');zoom.textContent=big?'기본 글자':'글자 크게';zoom.setAttribute('aria-pressed',String(big));};
  host.append(article,originalPanel);show(hasText&&!f.image_preview&&(matchMedia('(max-width:800px)').matches||!preview));

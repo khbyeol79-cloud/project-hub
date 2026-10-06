@@ -23,6 +23,10 @@ from .retrieval import retrieve
 from .conversations import Conversations
 from . import versions
 
+TEXT_PREVIEW_SUFFIXES = {'.md', '.markdown', '.txt', '.py', '.c', '.cpp', '.h', '.hpp', '.java',
+                         '.js', '.ts', '.json', '.csv', '.yaml', '.yml', '.ini', '.cfg', '.css'}
+TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
+
 ROOT = Path(__file__).resolve().parent
 FIELDS = '''f.id, f.original_filename, f.discord_channel, f.discord_channel_id,
             f.category, f.uploaded_at, f.file_size_bytes, f.version, f.duplicate_type,
@@ -83,7 +87,10 @@ def create_app(config=None, ai=None):
         if request.endpoint == 'html_preview':
             response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
         else:
-            response.headers['Content-Security-Policy'] += "; frame-src 'self' https://drive.google.com"
+            if request.endpoint == 'preview' and response.mimetype == 'application/pdf':
+                response.headers['Content-Security-Policy'] = response.headers['Content-Security-Policy'].replace(
+                    "frame-ancestors 'none'", "frame-ancestors 'self'")
+            response.headers['Content-Security-Policy'] += "; frame-src 'self' https://drive.google.com https://docs.google.com"
         return response
 
     @app.errorhandler(Exception)
@@ -275,6 +282,8 @@ def create_app(config=None, ai=None):
             reading=documents.get(file_id,reading=True)
             row['reading_blocks']=reading.get('blocks',[]) if reading else []
             row['reading_partial']=reading.get('status')=='partial' if reading else False
+            row['text_preview']=Path(row['original_filename']).suffix.lower() in TEXT_PREVIEW_SUFFIXES
+            row['pdf_preview']=Path(row['original_filename']).suffix.lower() == '.pdf'
             row['image_preview']=Path(row['original_filename']).suffix.lower() in {'.png','.jpg','.jpeg','.gif','.webp'}
             return jsonify(row)
 
@@ -305,8 +314,31 @@ def create_app(config=None, ai=None):
         elif magic.startswith(b'\xff\xd8\xff'): mime='image/jpeg'
         elif magic[:6] in {b'GIF87a',b'GIF89a'}: mime='image/gif'
         elif magic[:4]==b'RIFF' and magic[8:12]==b'WEBP': mime='image/webp'
+        elif Path(row['original_filename']).suffix.lower() == '.pdf' and magic.startswith(b'%PDF-'):
+            mime='application/pdf'
         if mime is None: abort(404)
         return send_file(path,mimetype=mime)
+
+    @app.get('/library/api/files/<int:file_id>/text-preview')
+    def text_preview(file_id):
+        row,path=local_file(file_id)
+        if Path(row['original_filename']).suffix.lower() not in TEXT_PREVIEW_SUFFIXES:
+            abort(404)
+        with path.open('rb') as stream:
+            data=stream.read(TEXT_PREVIEW_BYTES+1)
+        if len(data)>TEXT_PREVIEW_BYTES:
+            return jsonify(error='큰 원본은 원본 다운로드로 확인해 주세요.'),413
+        try:
+            if data.startswith((b'\xff\xfe',b'\xfe\xff')):
+                text=data.decode('utf-16')
+            else:
+                try: text=data.decode('utf-8-sig')
+                except UnicodeDecodeError: text=data.decode('cp949')
+        except UnicodeError:
+            return jsonify(error='문자 인코딩을 읽을 수 없습니다. 원본을 다운로드해 주세요.'),422
+        if '\x00' in text:
+            return jsonify(error='텍스트로 표시할 수 없는 원본입니다. 원본을 다운로드해 주세요.'),422
+        return jsonify(text=text)
 
     @app.get('/library/files/<int:file_id>/html-preview')
     def html_preview(file_id):

@@ -141,6 +141,49 @@ class LibraryTests(unittest.TestCase):
             db.execute("UPDATE files SET original_filename='escape.html',local_path=?",(str(self.db),))
         self.assertEqual(self.client.get(route).status_code,404)
 
+    def test_original_text_preserves_markup_whitespace_and_requires_access(self):
+        raw='# 계획\n\n    code()\n<script>alert(1)</script>\n'
+        self.put_file('plan.MD',raw.encode())
+        route='/library/api/files/1/text-preview'
+        self.assertEqual(self.app.test_client().get(route).status_code,401)
+        r=self.client.get(route)
+        self.assertEqual(r.status_code,200)
+        self.assertEqual(r.json['text'],raw)
+        self.assertEqual(r.mimetype,'application/json')
+        self.assertTrue(self.client.get('/library/api/files/1').json['text_preview'])
+        self.put_file('code.py','print("한글")\n'.encode('cp949'))
+        self.assertEqual(self.client.get(route).json['text'],'print("한글")\n')
+        self.put_file('unicode.txt','한글\n'.encode('utf-16'))
+        self.assertEqual(self.client.get(route).json['text'],'한글\n')
+
+    def test_original_text_rejects_binary_oversize_and_outside_storage(self):
+        route='/library/api/files/1/text-preview'
+        self.put_file('binary.txt',b'hello\x00world')
+        self.assertEqual(self.client.get(route).status_code,422)
+        self.put_file('large.txt',b'x'*(2*1024*1024+1))
+        self.assertEqual(self.client.get(route).status_code,413)
+        self.put_file('page.html',b'<h1>HTML uses isolated preview</h1>')
+        self.assertEqual(self.client.get(route).status_code,404)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE files SET original_filename='outside.txt',local_path=?",(str(self.db),))
+        self.assertEqual(self.client.get(route).status_code,404)
+
+    def test_local_pdf_preview_requires_valid_pdf_and_same_origin_frame(self):
+        route='/library/files/1/preview'
+        self.put_file('plan.pdf',b'%PDF-1.7\nplaceholder')
+        self.assertEqual(self.app.test_client().get(route).status_code,401)
+        r=self.client.get(route)
+        self.assertEqual(r.mimetype,'application/pdf')
+        self.assertIn("frame-ancestors 'self'",r.headers['Content-Security-Policy'])
+        self.assertIn("object-src 'none'",r.headers['Content-Security-Policy'])
+        self.assertTrue(self.client.get('/library/api/files/1').json['pdf_preview'])
+        r.close()
+        home=self.client.get('/library/')
+        self.assertIn("frame-ancestors 'none'",home.headers['Content-Security-Policy'])
+        home.close()
+        self.put_file('fake.pdf',b'<html>not a PDF</html>')
+        self.assertEqual(self.client.get(route).status_code,404)
+
     def test_pptx_uses_presentation_order(self):
         out=io.BytesIO()
         with zipfile.ZipFile(out,'w') as z:
