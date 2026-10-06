@@ -35,12 +35,13 @@ function renderReading(f,preview){
     api('files/'+f.id+'/text-preview').then(r=>{message.remove();originalPanel.append(node('pre',r.text,'original-text'));}).catch(e=>{message.textContent=e.message;});
    }else if(f.image_preview){const img=node('img');img.className='image-preview';img.src='/library/files/'+f.id+'/preview';img.alt=f.original_filename;originalPanel.append(img);
    }else if(preview){
+    if(f.docx_preview)originalPanel.append(node('p','문서의 글·표·이미지를 표시합니다. Word의 정확한 페이지 배치는 원본 다운로드로 확인해 주세요.','notice'));
     if(f.pdf_preview){const link=node('a','PDF 원본을 새 창에서 열기 ↗','download');link.href=preview;link.target='_blank';link.rel='noopener noreferrer';originalPanel.append(link);}
-    if(!f.html_preview&&!f.pdf_preview&&f.drive_url){
+    if(!f.html_preview&&!f.docx_preview&&!f.pdf_preview&&f.drive_url){
      const notice=node('p','미리보기가 차단되거나 표시되지 않으면 새 창에서 원본을 열어주세요.','notice');
      const link=node('a','Google Drive에서 원본 열기 ↗','download');link.href=f.drive_url;link.target='_blank';link.rel='noopener noreferrer';originalPanel.append(notice,link);
     }
-    const frame=node('iframe');frame.className='document-preview';frame.title=f.original_filename+' 원본 미리보기';frame.referrerPolicy='no-referrer';if(f.html_preview)frame.setAttribute('sandbox','');frame.src=preview;originalPanel.append(frame);
+    const frame=node('iframe');frame.className='document-preview';frame.title=f.original_filename+' 원본 미리보기';frame.referrerPolicy='no-referrer';if(f.html_preview||f.docx_preview)frame.setAttribute('sandbox','');frame.src=preview;originalPanel.append(frame);
    }else originalPanel.append(node('p','위의 원본 다운로드로 확인해 주세요.'));
   }
  }

@@ -76,4 +76,11 @@ def extract_reading(data,suffix):
         if size+cost>200000 or len(kept)>=3000:
             partial=True; break
         kept.append(block); size+=cost
-    return {'status':'partial' if partial else 'indexed','blocks':kept,'pages':[]}
+    result={'status':'partial' if partial else 'indexed','blocks':kept,'pages':[]}
+    if suffix == '.docx':
+        import runpy
+        from pathlib import Path
+        renderer=runpy.run_path(str(Path(__file__).with_name('docx_preview.py')))
+        result['original_html'],result['original_partial']=renderer['render_docx'](data)
+        result['preview_version']=1
+    return result

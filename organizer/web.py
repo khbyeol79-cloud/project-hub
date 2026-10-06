@@ -84,7 +84,7 @@ def create_app(config=None, ai=None):
         response.headers['Referrer-Policy'] = 'no-referrer'
         response.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive'
         response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-        if request.endpoint == 'html_preview':
+        if request.endpoint in {'html_preview','docx_preview'}:
             response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
         else:
             if request.endpoint == 'preview' and response.mimetype == 'application/pdf':
@@ -282,6 +282,7 @@ def create_app(config=None, ai=None):
             reading=documents.get(file_id,reading=True)
             row['reading_blocks']=reading.get('blocks',[]) if reading else []
             row['reading_partial']=reading.get('status')=='partial' if reading else False
+            row['docx_preview']=Path(row['original_filename']).suffix.lower() == '.docx'
             row['text_preview']=Path(row['original_filename']).suffix.lower() in TEXT_PREVIEW_SUFFIXES
             row['pdf_preview']=Path(row['original_filename']).suffix.lower() == '.pdf'
             row['image_preview']=Path(row['original_filename']).suffix.lower() in {'.png','.jpg','.jpeg','.gif','.webp'}
@@ -339,6 +340,16 @@ def create_app(config=None, ai=None):
         if '\x00' in text:
             return jsonify(error='텍스트로 표시할 수 없는 원본입니다. 원본을 다운로드해 주세요.'),422
         return jsonify(text=text)
+
+    @app.get('/library/files/<int:file_id>/docx-preview')
+    def docx_preview(file_id):
+        row,path=local_file(file_id)
+        if Path(row['original_filename']).suffix.lower() != '.docx':
+            abort(404)
+        result=documents.get(file_id,reading=True)
+        if not result or not result.get('original_html'):
+            return jsonify(error='문서 원본을 표시할 수 없습니다. 원본을 다운로드해 주세요.'),422
+        return app.response_class(result['original_html'],content_type='text/html; charset=utf-8')
 
     @app.get('/library/files/<int:file_id>/html-preview')
     def html_preview(file_id):

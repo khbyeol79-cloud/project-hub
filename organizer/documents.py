@@ -40,6 +40,9 @@ class Documents:
                 saved=db.execute('SELECT result,updated FROM documents WHERE id=? AND sha=?',(cache_id,row['sha256'])).fetchone()
             if saved:
                 result=json.loads(saved[0])
+                if reading and Path(row['original_filename']).suffix.lower()=='.docx' and result.get('preview_version')!=1:
+                    saved=None
+            if saved:
                 if result['status'] in {'indexed','partial','no_text','too_large','binary_text'} or time.time()-saved[1]<300:
                     return result
             path=Path(row['local_path'])

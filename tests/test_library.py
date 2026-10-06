@@ -124,6 +124,63 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(detail['reading_blocks'][1]['rows'],[['Cell']])
         self.assertEqual(self.db.read_bytes(),before)
 
+    def docx_with_image_and_merged_table(self):
+        from docx import Document
+        from PIL import Image
+        document=Document()
+        document.add_heading('Local DOCX preview',level=1)
+        paragraph=document.add_paragraph()
+        paragraph.add_run('Bold text').bold=True
+        paragraph.add_run(' <script>alert(1)</script>')
+        table=document.add_table(rows=3,cols=2)
+        table.cell(0,0).merge(table.cell(0,1)).text='Horizontal merge'
+        table.cell(1,0).merge(table.cell(2,0)).text='Vertical merge'
+        table.cell(1,1).text='Cell B'
+        table.cell(2,1).text='Cell C'
+        picture=io.BytesIO()
+        Image.new('RGB',(24,24),'green').save(picture,format='PNG')
+        picture.seek(0)
+        document.add_picture(picture)
+        out=io.BytesIO();document.save(out)
+        return out.getvalue()
+
+    def test_docx_preview_is_local_formatted_isolated_and_read_only(self):
+        self.put_file('plan.docx',self.docx_with_image_and_merged_table())
+        route='/library/files/1/docx-preview'
+        before=self.db.read_bytes()
+        self.assertEqual(self.app.test_client().get(route).status_code,401)
+        r=self.client.get(route)
+        self.assertEqual(r.status_code,200)
+        self.assertIn('Local DOCX preview',r.text)
+        self.assertIn('<strong>Bold text</strong>',r.text)
+        self.assertIn('colspan="2"',r.text)
+        self.assertIn('rowspan="2"',r.text)
+        self.assertIn('data:image/png;base64,',r.text)
+        self.assertIn('&lt;script&gt;',r.text)
+        self.assertNotIn('<script>',r.text)
+        policy=r.headers['Content-Security-Policy']
+        for rule in ['sandbox;',"default-src 'none'","img-src data:","frame-ancestors 'self'"]:
+            self.assertIn(rule,policy)
+        self.assertNotIn('allow-scripts',policy)
+        self.assertTrue(self.client.get('/library/api/files/1').json['docx_preview'])
+        self.assertEqual(self.db.read_bytes(),before)
+        self.put_file('fake.docx',b'not a ZIP document')
+        self.assertEqual(self.client.get(route).status_code,422)
+        self.put_file('text.txt',b'not a DOCX')
+        self.assertEqual(self.client.get(route).status_code,404)
+
+    def test_docx_preview_refreshes_existing_reading_cache(self):
+        import json
+        self.put_file('plan.docx',self.docx_with_image_and_merged_table())
+        from organizer.documents import Documents
+        isolated=Documents(self.db,self.storage,self.root/'old-reading-cache.db')
+        meta=isolated.metadata(1)
+        with closing(sqlite3.connect(isolated.cache)) as db,db:
+            db.execute('INSERT INTO documents VALUES(?,?,?,?,?)',(-1,meta['sha256'],json.dumps({'status':'indexed','blocks':[],'pages':[]}), '',0))
+        result=isolated.get(1,reading=True)
+        self.assertEqual(result['preview_version'],1)
+        self.assertIn('Local DOCX preview',result['original_html'])
+
     def test_html_preview_is_isolated_and_authenticated(self):
         self.put_file('plan.html',b'<style>h1{color:red}</style><h1>Plan</h1><script>alert(1)</script>')
         route='/library/files/1/html-preview'
