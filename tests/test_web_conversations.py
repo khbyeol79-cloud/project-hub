@@ -60,6 +60,27 @@ class WebConversationTests(unittest.TestCase):
         self.assertEqual(self.client.get('/library/api/messages?days=bad').status_code,400)
         self.assertEqual(self.client.get('/library/api/messages?offset=-1').status_code,400)
 
+    def test_date_order_covers_archive_and_keeps_channel_scope(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            now = datetime.now(timezone.utc)
+            db.execute('UPDATE conversation_messages SET created_at=? WHERE message_id=?',
+                       ((now-timedelta(days=10)).isoformat(), '101'))
+            for i in range(25):
+                db.execute('INSERT INTO conversation_messages VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           (str(200+i),'1','123',None,'plc','팀원','sensor','sensor',
+                            (now+timedelta(minutes=i)).isoformat(),None,1.0))
+        asc = self.client.get('/library/api/messages?sort=date_asc').json
+        later = self.client.get('/library/api/messages?sort=date_asc&offset=20').json
+        desc = self.client.get('/library/api/messages?sort=date_desc').json
+        self.assertTrue(asc['more'])
+        self.assertEqual(asc['messages'][0]['message_id'], '101')
+        self.assertEqual(desc['messages'][0]['message_id'], '224')
+        self.assertEqual(later['messages'][-1]['message_id'], '224')
+        self.assertNotIn('103', [m['message_id'] for m in asc['messages']+later['messages']])
+        self.assertEqual(self.client.get('/library/api/messages?sort=name_asc').status_code, 400)
+        self.assertEqual(self.client.get('/library/api/messages?sort=invalid').status_code, 400)
+
     def test_integrated_sources_and_budget_no_provider_for_no_match(self):
         self.prepare()
         response=self.client.post('/library/api/ai',headers=self.post_headers,

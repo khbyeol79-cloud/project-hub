@@ -23,7 +23,12 @@ class Conversations:
         db.row_factory = sqlite3.Row
         return db
 
-    def search(self, query='', channel='', days=0, offset=0, limit=20, terms=None, message_id=None):
+    def search(self, query='', channel='', days=0, offset=0, limit=20, terms=None, message_id=None, sort=None):
+        orders = {'date_desc': 'julianday(m.created_at) DESC,m.message_id DESC',
+                  'date_asc': 'julianday(m.created_at) ASC,m.message_id ASC'}
+        if sort is not None and sort not in orders:
+            raise ValueError('Invalid conversation sort')
+        order = orders.get(sort, 'score DESC,julianday(m.created_at) DESC,m.message_id DESC')
         if not self.channels:
             return {'messages': [], 'more': False, 'channels': []}
         with closing(self.connect()) as db:
@@ -52,7 +57,7 @@ class Conversations:
             # Rank keyword matches before recency; do not load an unbounded archive into RAM.
             ranking = ' + '.join('(instr(m.search_content,?)>0)' for _ in words) or '0'
             rows = db.execute('SELECT m.*, ('+ranking+') AS score FROM conversation_messages m WHERE '+where+
-                ' ORDER BY score DESC,julianday(m.created_at) DESC,m.message_id DESC LIMIT ? OFFSET ?',
+                ' ORDER BY '+order+' LIMIT ? OFFSET ?',
                 [*words, *params, limit+1, offset]).fetchall()
             messages = []
             for row in rows[:limit]:

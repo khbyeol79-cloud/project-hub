@@ -208,10 +208,12 @@ def create_app(config=None, ai=None):
         try:
             days=int(request.args.get('days','0'))
             offset=int(request.args.get('offset','0'))
+            sort=request.args.get('sort','date_desc')
+            if sort not in {'date_desc','date_asc'}: raise ValueError()
             if days not in {0,7,30} or not 0<=offset<=100000: raise ValueError()
         except ValueError: abort(400)
         result=conversations.search(request.args.get('q','').strip()[:100],
-                                    request.args.get('channel','')[:100],days,offset)
+                                    request.args.get('channel','')[:100],days,offset,sort=sort)
         result['enabled']=bool(conversations.channels)
         return jsonify(result)
 
