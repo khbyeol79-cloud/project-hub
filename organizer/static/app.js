@@ -4,19 +4,27 @@ let selected = null, offset = 0, generation = 0, searching = 0, busy = false, co
 const statusNames = {indexed:'본문 준비됨',partial:'일부 본문',pending:'본문 처리 대기',ocr_pending:'문자 인식 대기',failed:'본문 처리 실패',missing:'원본 파일 확인 필요',changed:'파일 변경 · 재처리 대기',encoding:'문자 해석 실패',encrypted:'암호화 · 원본으로 보기',too_large:'변환 크기 제한 · 원본으로 보기',binary_text:'본문 추출 불가',unsupported:'지원하지 않는 형식 · 원본으로 보기',no_text:'추출된 본문 없음'};
 function node(tag, text, cls) { const e=document.createElement(tag); if(text!==undefined)e.textContent=text; if(cls)e.className=cls; return e; }
 async function api(path, options={}) { const r=await fetch(scopedUrl('/library/api/'+path),options); if(r.redirected||!r.headers.get('content-type')?.includes('application/json'))throw Error('자료실 연결을 확인해 주세요.');const data=await r.json();if(!r.ok)throw Error(data.error||'요청에 실패했습니다.');return data; }
-let scopeVersion=0;
-function scopeParams(){return $('project').value==='additional'?{project:'additional',team:$('team').value}:{project:'main'};}
-function scopeName(){return $('project').value==='additional'?'추가 프로젝트 · '+$('team').selectedOptions[0].textContent:'기존 프로젝트 · 11명';}
+let scopeVersion=0, activeProject='main', activeTeam='1a';
+function scopeParams(){return activeProject==='additional'?{project:'additional',team:activeTeam}:{project:'main'};}
+function scopeName(){return activeProject==='additional'?'추가 프로젝트 · '+(activeTeam==='1a'?'A팀 · 6명':'B팀 · 5명'):'기존 프로젝트 · 11명';}
+function renderScope(){
+ const scope=activeProject==='main'?'main':activeTeam;
+ document.querySelectorAll('[data-scope]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.scope===scope)));
+ $('scope-status').textContent=scopeName()+' 자료를 표시합니다.';
+}
 function scopedUrl(path){const url=new URL(path,location.origin);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));return url.pathname+url.search;}
 function itemUrl(key,id){const url=new URL(location.pathname,location.origin);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));url.searchParams.set(key,id);return url.pathname+url.search;}
 function chooseScope(){
- scopeVersion++;generation++;searching++;selected=null;$('team').hidden=$('project').value!=='additional';
+ scopeVersion++;generation++;searching++;selected=null;renderScope();
  $('query').value='';$('channel').replaceChildren(new Option('모든 채널',''));$('extension').replaceChildren(new Option('모든 확장자',''));$('files').replaceChildren();$('count').textContent='';
  $('pages').replaceChildren();$('file-versions').replaceChildren();$('document').hidden=$('ai-panel').hidden=$('weekly-panel').hidden=true;$('welcome').hidden=false;
  $('answer').hidden=true;$('answer-body').textContent='';$('sources').replaceChildren();$('ai-status').textContent='';weeklyResult(null);$('weekly-files').replaceChildren();$('weekly-messages').replaceChildren();
  history.replaceState(null,'',scopedUrl(location.pathname));scopeLabel();loadFiles();loadProcessing();
 }
-$('project').onchange=chooseScope;$('team').onchange=chooseScope;
+document.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>{
+ const scope=b.dataset.scope;if(scope===(activeProject==='main'?'main':activeTeam))return;
+ activeProject=scope==='main'?'main':'additional';if(scope!=='main')activeTeam=scope;chooseScope();
+});
 const size = n => n<1024*1024 ? Math.max(1,Math.round(n/1024))+' KB' : (n/1024/1024).toFixed(1)+' MB';
 async function loadFiles(append=false){if($('search-kind').value==='all')return loadCombined(append);if($('search-kind').value==='messages')return loadMessages(append);const seq=++searching; if(!append)offset=0; $('list-message').textContent='자료를 찾고 있어요…';$('more').hidden=true;
  try {const params=new URLSearchParams({q:$('query').value,channel:$('channel').value,extension:$('extension').value,sort:$('sort').dataset.sort,view:($('file-view').checked?'latest':'all'),days:$('message-days').value,offset}); const d=await api('files?'+params); if(seq!==searching)return;
@@ -39,7 +47,7 @@ async function runAI(task){if(busy)return;const version=scopeVersion;busy=true;u
  $('answer').hidden=false;$('answer-label').textContent=(task==='ask'?'선택 범위 답변':'최근 자료 정리')+(r.cached?' · 저장된 결과':'');$('answer-body').textContent=r.answer;$('answer-partial').hidden=!r.partial;$('sources').replaceChildren();r.sources.forEach(s=>{if(s.kind==='message'){const a=node('a','['+s.id+'] '+s.label);if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(s.url||'')){a.href=s.url;a.target='_blank';a.rel='noopener noreferrer';}$('sources').append(a);return;}const b=node('button','['+s.id+'] '+s.label);b.onclick=async()=>{await openFile(s.file_id,s.page);tab(false);if($('extracted-text'))$('extracted-text').open=true;document.getElementById('page-'+s.page)?.scrollIntoView({behavior:'smooth'});};$('sources').append(b);});$('ai-status').textContent='';
  }catch(e){if(version===scopeVersion)$('ai-status').textContent=e.message;}finally{busy=false;updateButtons();usage();}}
 $('search').onsubmit=e=>{e.preventDefault();loadFiles();};$('channel').onchange=()=>{scopeLabel();loadFiles();};$('extension').onchange=()=>loadFiles();$('more').onclick=()=>loadFiles(true);$('tab-text').onclick=()=>tab(false);$('global-ai').onclick=()=>tab(true);$('sidebar-ai').onclick=()=>tab(true);$('summarize').onclick=()=>runAI('summary');$('ask').onsubmit=e=>{e.preventDefault();runAI('ask');};
-async function start(){const initial=new URLSearchParams(location.search);if(initial.get('project')==='additional'&&['1a','1b'].includes(initial.get('team'))){$('project').value='additional';$('team').value=initial.get('team');$('team').hidden=false;}const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname+location.search);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();loadProcessing();await openLinked();}start();
+async function start(){const initial=new URLSearchParams(location.search);if(initial.get('project')==='additional'&&['1a','1b'].includes(initial.get('team'))){activeProject='additional';activeTeam=initial.get('team');}renderScope();const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname+location.search);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();loadProcessing();await openLinked();}start();
 $('share').onclick=()=>copyItemLink($('share'));$('item-share').onclick=()=>copyItemLink($('item-share'));
 
 const mobile=matchMedia('(max-width:800px)');

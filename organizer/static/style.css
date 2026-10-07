@@ -61,5 +61,11 @@
 
 .original-text{margin:0;padding:16px;background:#f7f8f4;border:1px solid var(--line);border-radius:8px;font:13px/1.75 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}
 
-.project-controls{display:flex;gap:6px;min-width:0;align-items:center}.project-controls select{min-width:0;max-width:200px;border:1px solid var(--line);border-radius:8px;background:white;color:var(--green);padding:8px;font:inherit;font-size:12px}.project-controls [hidden]{display:none}
-@media(max-width:800px){.project-controls{order:10;width:100%;padding-left:50px}.project-controls select{flex:1;max-width:none;font-size:12px;padding:7px}.reader{scroll-margin-top:125px}}
+/* Direct scope buttons are also available inside the mobile list drawer. */
+.scope-buttons{display:flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:10px;background:#eaf0e6;min-width:0}
+.scope-buttons button{flex:1;min-width:0;min-height:40px;padding:6px 18px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:13px;white-space:nowrap}
+.scope-buttons button:hover{background:#f4f8ef;color:var(--green)}
+.scope-buttons button[aria-pressed=true]{background:var(--green);color:white;font-weight:650;box-shadow:0 1px 3px #0001}
+.header-scopes{margin-left:24px}
+.project-picker{display:none}
+@media(max-width:800px){.header-scopes{order:10;width:100%;margin:2px 0 0}.scope-buttons button{min-height:40px;padding:6px 12px}.project-picker{display:block;flex-shrink:0;margin-bottom:10px}.reader{scroll-margin-top:140px}}
