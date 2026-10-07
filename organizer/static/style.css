@@ -60,3 +60,6 @@
 @media(max-width:800px){#sidebar-ai{margin-bottom:8px;padding:8px 12px}#processing-box{margin-bottom:8px}.collection .listheading{margin-top:10px}}
 
 .original-text{margin:0;padding:16px;background:#f7f8f4;border:1px solid var(--line);border-radius:8px;font:13px/1.75 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}
+
+.project-controls{display:flex;gap:6px;min-width:0;align-items:center}.project-controls select{min-width:0;max-width:200px;border:1px solid var(--line);border-radius:8px;background:white;color:var(--green);padding:8px;font:inherit;font-size:12px}.project-controls [hidden]{display:none}
+@media(max-width:800px){.project-controls{order:10;width:100%;padding-left:50px}.project-controls select{flex:1;max-width:none;font-size:12px;padding:7px}.reader{scroll-margin-top:125px}}

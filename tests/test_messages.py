@@ -259,7 +259,7 @@ class MessageCommandTests(MessageFixture, unittest.IsolatedAsyncioTestCase):
     async def test_schema_empty_query_and_dm_are_rejected_privately(self):
         command = self.commands.tree.get_command('대화검색')
         self.assertTrue(command.guild_only)
-        self.assertEqual([p['name'] for p in command.to_dict(self.commands.tree)['options']], ['키워드', '분류', '페이지'])
+        self.assertEqual([p['name'] for p in command.to_dict(self.commands.tree)['options']], ['키워드', '분류', '페이지', '자료범위'])
         for keyword, guild in [(' ', 1), ('servo', None)]:
             interaction = self.interaction()
             interaction.guild_id = guild

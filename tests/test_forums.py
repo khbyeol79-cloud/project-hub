@@ -89,4 +89,4 @@ class ForumTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(database.due_uploads(), [])
 
     def test_folders_match_current_discord_names(self):
-        self.assertEqual(set(CATEGORY_FOLDERS.values()), {"hello⭐", "기구제작🎨", "pc💻", "plc🛠️", "게시물"})
+        self.assertEqual(set(CATEGORY_FOLDERS.values()), {"hello⭐", "기구제작🎨", "pc💻", "plc🛠️", "게시물", "추가 프로젝트 - 1팀", "추가 프로젝트 - 2팀"})

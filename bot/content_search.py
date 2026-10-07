@@ -173,12 +173,18 @@ def snippet(body, keyword, width=180):
     return ('…' if start else '') + body[start:end] + ('…' if end < len(body) else '')
 
 
-def find_content(guild_id, channels, keyword, category=None, page=1):
+def find_content(guild_id, channels, keyword, category=None, page=1, *, scope=None):
     needle = clean_text(keyword).casefold()
     if not needle or len(keyword) > 100 or not 1 <= page <= 10000:
         raise ValueError('Invalid content query')
+    if __package__:
+        from . import projects
+    else:
+        import projects
     clause = 'f.discord_guild_id=? AND f.discord_channel_id IN (SELECT id FROM visible_channels) AND ' + ELIGIBLE
     values = [str(guild_id)]
+    if scope is not None:
+        clause += ' AND ' + projects.predicate(scope, 'f.category')
     if category:
         clause += ' AND f.category=?'
         values.append(category)

@@ -7,21 +7,23 @@ import re
 import sqlite3
 
 if __package__:
-    from . import database, content_search
+    from . import database, content_search, projects, projects
 else:
-    import database, content_search
+    import database, content_search, projects
 
 clean = content_search.clean_text
 CURRENT = '''d.source_sha256=f.sha256 AND d.status IN ('indexed','partial','ocr_pending')'''
-FSCOPE = 'f.discord_guild_id=? AND f.discord_channel_id IN (SELECT id FROM visible_channels)'
-MSCOPE = 'm.guild_id=? AND m.channel_id IN (SELECT id FROM visible_channels)'
+FSCOPE = 'f.discord_guild_id=? AND f.discord_channel_id IN (SELECT id FROM visible_channels) AND in_project(f.category)'
+MSCOPE = 'm.guild_id=? AND m.channel_id IN (SELECT id FROM visible_channels) AND in_project(m.category)'
 KST = timezone(timedelta(hours=9))
 
 
 @contextmanager
-def connection(channels):
+def connection(channels, scope=None):
     db = database.get_connection()
     try:
+        if scope is not None: projects.validate(scope)
+        db.create_function('in_project',1,lambda category: scope is None or projects.category_scope(category)==scope, deterministic=True)
         db.row_factory = sqlite3.Row
         db.create_function('normalized', 1, lambda s: clean(s or '').casefold(), deterministic=True)
         db.execute('CREATE TEMP TABLE visible_channels (id TEXT PRIMARY KEY)')
@@ -59,7 +61,7 @@ def catalogue(db, guild_id, ids):
         [str(guild_id), *ids])}
 
 
-def unified(guild_id, channels, keyword, category=None, page=1):
+def unified(guild_id, channels, keyword, category=None, page=1, *, scope=None):
     if not clean(keyword) or len(keyword)>100 or not 1<=page<=10000:
         raise ValueError('Invalid query')
     needle = clean(keyword).casefold()
@@ -77,7 +79,7 @@ def unified(guild_id, channels, keyword, category=None, page=1):
         WHERE '''+MSCOPE+''' AND (? IS NULL OR m.category=?) AND instr(m.search_content,?)>0
     ) '''
     values = [needle,str(guild_id),category,category,needle,str(guild_id),category,category,needle]
-    with connection(channels) as db:
+    with connection(channels,scope) as db:
         counts = dict(db.execute(sql+'SELECT kind,COUNT(*) FROM hits GROUP BY kind', values))
         hits = [dict(r) for r in db.execute(sql+'''SELECT * FROM hits ORDER BY julianday(stamp) DESC,
             kind,CAST(key AS INTEGER) DESC LIMIT 5 OFFSET ?''', [*values,(page-1)*5])]
@@ -100,15 +102,15 @@ def unified(guild_id, channels, keyword, category=None, page=1):
         return hits,counts
 
 
-def suggestions(guild_id, channels, keyword):
-    with connection(channels) as db:
+def suggestions(guild_id, channels, keyword, *, scope=None):
+    with connection(channels,scope) as db:
         return [dict(r) for r in db.execute('''SELECT f.id,f.original_filename,f.uploaded_at FROM files f WHERE '''+FSCOPE+'''
             AND instr(normalized(f.original_filename),?)>0 ORDER BY julianday(f.uploaded_at) DESC,f.id DESC LIMIT 20''',
             (str(guild_id),clean(keyword[:100]).casefold()))]
 
 
-def detail(guild_id, channels, file_id):
-    with connection(channels) as db:
+def detail(guild_id, channels, file_id, *, scope=None):
+    with connection(channels,scope) as db:
         row = catalogue(db,guild_id,[file_id]).get(file_id)
         if row is None:
             return None
@@ -132,8 +134,8 @@ def detail(guild_id, channels, file_id):
         return row
 
 
-def status(guild_id,channels):
-    with connection(channels) as db:
+def status(guild_id,channels, *, scope=None):
+    with connection(channels,scope) as db:
         uploads = dict(db.execute('SELECT f.upload_status,COUNT(*) FROM files f WHERE '+FSCOPE+' GROUP BY f.upload_status',(str(guild_id),)))
         documents = dict(db.execute('''SELECT COALESCE(d.status,'pending'),COUNT(*) FROM files f
             LEFT JOIN content_documents d ON d.file_id=f.id AND d.source_sha256=f.sha256 WHERE '''+FSCOPE+
@@ -176,9 +178,9 @@ def make_source(row, kind, text=None):
         'message_id':str(mid),'body_hash':hashlib.sha256(body.encode()).hexdigest()}
 
 
-def sources(guild_id,channels,*,file_id=None,question='',period=None,category=None,now=None,max_chars=12000):
+def sources(guild_id,channels,*,file_id=None,question='',period=None,category=None,now=None,max_chars=12000,scope=None):
     """Select authorized text before any AI call. Never call an unscoped administrator reader."""
-    with connection(channels) as db:
+    with connection(channels,scope) as db:
         if file_id is not None:
             if catalogue(db,guild_id,[file_id]).get(file_id) is None:
                 return [],False
@@ -255,8 +257,8 @@ def sources(guild_id,channels,*,file_id=None,question='',period=None,category=No
         return selected,partial
 
 
-def sources_current(guild_id,channels,items):
-    with connection(channels) as db:
+def sources_current(guild_id,channels,items, *, scope=None):
+    with connection(channels,scope) as db:
         for item in items:
             if item['kind']=='file':
                 row = db.execute('''SELECT f.sha256,p.body FROM files f JOIN content_documents d ON d.file_id=f.id

@@ -55,18 +55,18 @@ class CommandSuite:
 
         @tree.command(name='찾기',description='파일명·문서 본문·대화를 한 번에 검색합니다.')
         @app_commands.guild_only()
-        @app_commands.rename(keyword='키워드',category='분류',page='페이지')
+        @app_commands.rename(keyword='키워드',category='분류',page='페이지',scope='자료범위')
         @app_commands.describe(keyword='파일이나 대화에서 찾을 단어',category='찾을 자료 분류',page='5개씩 표시할 페이지')
-        @app_commands.choices(category=search.CHOICES)
+        @app_commands.choices(category=search.CHOICES,scope=search.SCOPE_CHOICES)
         @app_commands.checks.cooldown(1,3,key=lambda i:(i.guild_id,i.user.id))
         async def find(interaction:discord.Interaction,keyword:app_commands.Range[str,1,100],
-                       category:str=None,page:app_commands.Range[int,1,10000]=1):
+                       category:str=None,page:app_commands.Range[int,1,10000]=1,scope:str=None):
             if await self.begin(interaction):
                 if not data.clean(keyword):
                     await self.tell(interaction,'검색할 단어나 문구를 입력해 주세요.')
                     return
-                channels = await self.allowed(interaction,category)
-                rows,counts = await asyncio.to_thread(data.unified,interaction.guild_id,channels,keyword,category,page)
+                channels = await self.allowed(interaction,category,scope)
+                rows,counts = await asyncio.to_thread(data.unified,interaction.guild_id,channels,keyword,category,page,scope=search.projects.invocation_scope(interaction,scope))
                 embed = discord.Embed(title='통합 검색',colour=0x386FAD,
                     description=f"검색어: {search.display_text(keyword)}\n분류: {search.CATEGORY_LABELS.get(category,'전체')}")
                 for n,row in enumerate(rows,(page-1)*5+1):
@@ -93,11 +93,13 @@ class CommandSuite:
 
         @tree.command(name='상태',description='열람 가능한 자료의 저장·업로드·본문 준비 상태를 확인합니다.')
         @app_commands.guild_only()
+        @app_commands.rename(scope='자료범위')
+        @app_commands.choices(scope=search.SCOPE_CHOICES)
         @app_commands.checks.cooldown(1,5,key=lambda i:(i.guild_id,i.user.id))
-        async def status(interaction:discord.Interaction):
+        async def status(interaction:discord.Interaction,scope:str=None):
             if await self.begin(interaction):
-                channels = await self.allowed(interaction)
-                snapshot = await asyncio.to_thread(data.status,interaction.guild_id,channels)
+                channels = await self.allowed(interaction,scope=scope)
+                snapshot = await asyncio.to_thread(data.status,interaction.guild_id,channels,scope=search.projects.invocation_scope(interaction,scope))
                 upload,docs = snapshot['uploads'],snapshot['documents']
                 embed = discord.Embed(title='Project Hub 상태',description='봇 응답 정상 · 열람 가능한 자료 기준',colour=0x386FAD)
                 embed.add_field(name='수집 자료',value=f"파일 {sum(upload.values())}개 · 대화 {snapshot['conversations']}개",inline=False)
@@ -112,18 +114,19 @@ class CommandSuite:
 
         @tree.command(name='파일정보',description='선택한 파일의 작성자·버전·중복·저장 상태를 확인합니다.')
         @app_commands.guild_only()
-        @app_commands.rename(file='파일')
+        @app_commands.rename(file='파일',scope='자료범위')
+        @app_commands.choices(scope=search.SCOPE_CHOICES)
         @app_commands.describe(file='이름을 입력한 뒤 목록에서 파일 선택')
         @app_commands.checks.cooldown(1,3,key=lambda i:(i.guild_id,i.user.id))
-        async def info(interaction:discord.Interaction,file:str):
+        async def info(interaction:discord.Interaction,file:str,scope:str=None):
             if await self.begin(interaction):
                 try:
                     number = file_number(file)
                 except ValueError as error:
                     await self.tell(interaction,str(error))
                     return
-                channels = await self.allowed(interaction)
-                row = await asyncio.to_thread(data.detail,interaction.guild_id,channels,number)
+                channels = await self.allowed(interaction,scope=scope)
+                row = await asyncio.to_thread(data.detail,interaction.guild_id,channels,number,scope=search.projects.invocation_scope(interaction,scope))
                 if row is None:
                     await self.tell(interaction,'이 파일을 확인할 수 없습니다. 파일을 다시 선택해 주세요.')
                     return
@@ -140,29 +143,29 @@ class CommandSuite:
 
         @tree.command(name='요약',description='선택 문서 또는 기간별 대화를 Google AI로 요약합니다.')
         @app_commands.guild_only()
-        @app_commands.rename(file='파일',period='대화기간',category='분류')
+        @app_commands.rename(file='파일',period='대화기간',category='분류',scope='자료범위')
         @app_commands.describe(file='문서 요약: 이름을 입력한 뒤 파일 선택',period='대화 요약 기간, 파일 미선택 시 기본 오늘',category='대화 요약에 사용할 분류')
-        @app_commands.choices(period=PERIODS,category=search.CHOICES)
+        @app_commands.choices(period=PERIODS,category=search.CHOICES,scope=search.SCOPE_CHOICES)
         @app_commands.checks.cooldown(1,30,key=lambda i:(i.guild_id,i.user.id))
-        async def summary(interaction:discord.Interaction,file:str=None,period:str=None,category:str=None):
+        async def summary(interaction:discord.Interaction,file:str=None,period:str=None,category:str=None,scope:str=None):
             if await self.begin(interaction):
                 if file and (period or category):
                     await self.tell(interaction,'문서 요약은 파일만 선택하고, 대화 요약은 기간·분류를 선택해 주세요.')
                     return
-                await self.ai(interaction,'summary',file=file,period=period or ('today' if not file else None),category=category)
+                await self.ai(interaction,'summary',file=file,period=period or ('today' if not file else None),category=category,scope=scope)
 
         @tree.command(name='질문',description='열람 가능한 파일·대화를 근거로 Google AI가 답합니다.')
         @app_commands.guild_only()
-        @app_commands.rename(question='질문',file='파일',category='분류')
+        @app_commands.rename(question='질문',file='파일',category='분류',scope='자료범위')
         @app_commands.describe(question='저장된 자료에 관해 물어볼 내용',file='선택하면 해당 문서만 사용',category='찾을 자료 분류')
-        @app_commands.choices(category=search.CHOICES)
+        @app_commands.choices(category=search.CHOICES,scope=search.SCOPE_CHOICES)
         @app_commands.checks.cooldown(1,30,key=lambda i:(i.guild_id,i.user.id))
-        async def ask(interaction:discord.Interaction,question:app_commands.Range[str,1,1000],file:str=None,category:str=None):
+        async def ask(interaction:discord.Interaction,question:app_commands.Range[str,1,1000],file:str=None,category:str=None,scope:str=None):
             if await self.begin(interaction):
                 if not question.strip():
                     await self.tell(interaction,'질문을 입력해 주세요.')
                     return
-                await self.ai(interaction,'ask',file=file,question=question,category=category)
+                await self.ai(interaction,'ask',file=file,question=question,category=category,scope=scope)
 
         for command in (info,summary,ask):
             command.autocomplete('file')(self.autocomplete)
@@ -175,21 +178,25 @@ class CommandSuite:
         return True
 
     async def send(self,interaction,embed):
+        selected = search.projects.option_scope(interaction)
+        embed.description = search.projects.LABELS[search.projects.invocation_scope(interaction, selected)] + '\n' + (embed.description or '')
         await interaction.edit_original_response(embed=embed,allowed_mentions=discord.AllowedMentions.none())
 
     async def tell(self,interaction,text):
         await interaction.edit_original_response(content=text,allowed_mentions=discord.AllowedMentions.none())
 
-    async def allowed(self,interaction,category=None):
+    async def allowed(self,interaction,category=None,scope=None):
         candidates = await asyncio.to_thread(data.candidates,interaction.guild_id,category)
+        candidates = await asyncio.to_thread(self.owner.narrow,interaction,candidates,scope)
         return await asyncio.wait_for(search.visible_channels(self.client,interaction.user,interaction.guild_id,candidates),25)
 
     async def autocomplete(self,interaction,current):
         if interaction.guild_id is None or not isinstance(interaction.user,discord.Member):
             return []
         async def choices():
-            channels = await self.allowed(interaction)
-            rows = await asyncio.to_thread(data.suggestions,interaction.guild_id,channels,current)
+            selected = search.projects.option_scope(interaction)
+            channels = await self.allowed(interaction,scope=selected)
+            rows = await asyncio.to_thread(data.suggestions,interaction.guild_id,channels,current,scope=search.projects.invocation_scope(interaction,selected))
             return [app_commands.Choice(name=f"{row['original_filename'][:70]} · {kst(row['uploaded_at'])} · #{row['id']}"[:100],
                                        value=str(row['id'])) for row in rows]
         try:
@@ -205,13 +212,13 @@ class CommandSuite:
             ('상태 · 파일정보','/상태 — 수집·업로드·본문 준비 확인\n/파일정보 파일:이름을 입력하고 목록에서 선택'),
             ('요약','/요약 파일:선택한 문서\n/요약 대화기간:오늘 분류:PLC'),
             ('질문','/질문 질문:서보 설정값이 뭐였지?\n파일을 선택하면 해당 문서만 사용'),
-            ('사용 방법','검색에는 분류·페이지를 추가할 수 있습니다. 결과는 본인에게만 보입니다.\n요약·질문은 조회 가능한 자료를 Google AI로 처리하며 웹 자료실과 같은 사용 한도를 적용합니다.')]
+            ('사용 방법','자료범위를 생략하면 현재 채널의 프로젝트·팀만 조회합니다. 자료범위로 다른 팀을 선택할 수 있으며 열람 권한은 그대로 적용됩니다.\n검색에는 분류·페이지를 추가할 수 있습니다. 결과는 본인에게만 보입니다.\n요약·질문은 조회 가능한 자료를 Google AI로 처리하며 웹 자료실과 같은 사용 한도를 적용합니다.')]
         for name,value in examples:
             embed.add_field(name=name,value=value,inline=False)
         embed.set_footer(text='도움말 포함 11개 명령 · 파일 선택 목록에도 열람 권한 적용')
         await self.send(interaction,embed)
 
-    async def ai(self,interaction,task,*,file=None,period=None,category=None,question=''):
+    async def ai(self,interaction,task,*,file=None,period=None,category=None,question='',scope=None):
         if self.ai_lock.locked():
             await self.tell(interaction,'다른 AI 요청을 처리하고 있습니다. 잠시 후 다시 요청해 주세요.')
             return
@@ -221,9 +228,9 @@ class CommandSuite:
             await self.tell(interaction,str(error))
             return
         async with self.ai_lock:
-            channels = await self.allowed(interaction,category)
+            channels = await self.allowed(interaction,category,scope)
             items,partial = await asyncio.to_thread(data.sources,interaction.guild_id,channels,
-                file_id=number,question=question,period=period,category=category)
+                file_id=number,question=question,period=period,category=category,scope=search.projects.invocation_scope(interaction,scope))
             if not items:
                 await self.tell(interaction,'열람 가능한 자료에서 읽을 내용을 찾지 못했습니다. 파일 선택이나 질문의 단어를 확인해 주세요. AI는 호출하지 않았습니다.')
                 return
@@ -243,7 +250,8 @@ class CommandSuite:
             # Recheck live permissions and source revisions after the remote request too.
             allowed = await asyncio.wait_for(search.visible_channels(self.client,interaction.user,interaction.guild_id,
                                                {item['channel_id'] for item in items}),25)
-            if not await asyncio.to_thread(data.sources_current,interaction.guild_id,allowed,items):
+            allowed = await asyncio.to_thread(self.owner.narrow,interaction,allowed,scope)
+            if not await asyncio.to_thread(data.sources_current,interaction.guild_id,allowed,items,scope=search.projects.invocation_scope(interaction,scope)):
                 await self.tell(interaction,'자료 내용이나 열람 권한이 바뀌어 결과를 표시하지 않았습니다. 다시 요청해 주세요.')
                 return
             refs = {f'S{i}':item for i,item in enumerate(items,1)}

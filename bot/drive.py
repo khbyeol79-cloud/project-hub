@@ -25,6 +25,8 @@ CATEGORY_FOLDERS = {
     "vision": "pc💻",
     "plc": "plc🛠️",
     "meeting": "게시물",
+    "robot_1a": "추가 프로젝트 - 1팀",
+    "robot_1b": "추가 프로젝트 - 2팀",
 }
 
 ROOT_FOLDER_NAME = "Project Hub"

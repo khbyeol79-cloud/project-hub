@@ -158,7 +158,7 @@ class VersionCommandTests(VersionFixture, unittest.IsolatedAsyncioTestCase):
         command = self.commands.tree.get_command('버전')
         self.assertTrue(command.guild_only)
         self.assertEqual([p['name'] for p in command.to_dict(self.commands.tree)['options']],
-                         ['키워드', '분류', '페이지'])
+                         ['키워드', '분류', '페이지', '자료범위'])
         interaction = self.interaction()
         await command.callback(interaction, '   ')
         interaction.response.send_message.assert_awaited_once()

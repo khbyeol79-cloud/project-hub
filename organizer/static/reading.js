@@ -33,7 +33,7 @@ function renderReading(f,preview){
    if(f.text_preview){
     const message=node('p','원본을 불러오고 있어요…','notice');originalPanel.append(message);
     api('files/'+f.id+'/text-preview').then(r=>{message.remove();originalPanel.append(node('pre',r.text,'original-text'));}).catch(e=>{message.textContent=e.message;});
-   }else if(f.image_preview){const img=node('img');img.className='image-preview';img.src='/library/files/'+f.id+'/preview';img.alt=f.original_filename;originalPanel.append(img);
+   }else if(f.image_preview){const img=node('img');img.className='image-preview';img.src=scopedUrl('/library/files/'+f.id+'/preview');img.alt=f.original_filename;originalPanel.append(img);
    }else if(preview){
     if(f.docx_preview)originalPanel.append(node('p','문서의 글·표·이미지를 표시합니다. Word의 정확한 페이지 배치는 원본 다운로드로 확인해 주세요.','notice'));
     if(f.pdf_preview){const link=node('a','PDF 원본을 새 창에서 열기 ↗','download');link.href=preview;link.target='_blank';link.rel='noopener noreferrer';originalPanel.append(link);}

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+from bot import projects
 
 
 def search_terms(question):
@@ -17,7 +18,7 @@ def search_terms(question):
     return terms
 
 
-def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(), since=None, channel=''):
+def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(), since=None, channel='', scope=None):
     terms=search_terms(question)
     related=set(related_file_ids)
     candidates=[]
@@ -25,6 +26,7 @@ def retrieve(db_path, documents, question, max_chars=12000, related_file_ids=(),
         db.row_factory=sqlite3.Row
         has_parent=any(r[1]=='discord_parent_channel_id' for r in db.execute('PRAGMA table_info(files)'))
         clause=' AND (?=\'\' OR discord_channel_id=?'+(' OR discord_parent_channel_id=?' if has_parent else '')+')'
+        if scope is not None: clause += ' AND ' + projects.predicate(scope)
         metadata={r['id']:dict(r) for r in db.execute('''SELECT id,original_filename,sha256,uploaded_at FROM files
             WHERE (? IS NULL OR julianday(uploaded_at)>=julianday(?))'''+clause,
             [since,since,channel,channel]+([channel] if has_parent else []))}

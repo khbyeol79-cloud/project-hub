@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import sqlite3
+from bot import projects
 
 
 def discord_url(guild, channel, message):
@@ -14,7 +15,8 @@ def discord_url(guild, channel, message):
 
 
 class Conversations:
-    def __init__(self, db_path, channels=()):
+    def __init__(self, db_path, channels=(), scope=None):
+        self.scope = projects.validate(scope) if scope is not None else None
         self.path = Path(db_path).resolve()
         self.channels = tuple(dict.fromkeys(str(c) for c in channels if re.fullmatch(r'[0-9]{1,20}', str(c))))
 
@@ -37,6 +39,8 @@ class Conversations:
                 return {'messages': [], 'more': False, 'channels': []}
             marks = ','.join('?' for _ in self.channels)
             scope = f'(m.channel_id IN ({marks}) OR m.parent_id IN ({marks}))'
+            if self.scope is not None:
+                scope += " AND " + projects.predicate(self.scope, "m.category")
             params = [*self.channels, *self.channels]
             if 'conversation_tombstones' in tables:
                 scope += ' AND NOT EXISTS (SELECT 1 FROM conversation_tombstones t WHERE t.message_id=m.message_id)'
@@ -66,10 +70,10 @@ class Conversations:
                 item['url'] = discord_url(row['guild_id'],row['channel_id'],row['message_id'])
                 item['files'] = [dict(f) for f in db.execute('''SELECT id,original_filename FROM files
                     WHERE discord_message_id=? AND discord_guild_id=? AND discord_channel_id=?
-                    ORDER BY id LIMIT 20''', (row['message_id'],row['guild_id'],row['channel_id']))]
+                    AND ''' + (projects.predicate(self.scope) if self.scope is not None else '1=1') + ''' ORDER BY id LIMIT 20''', (row['message_id'],row['guild_id'],row['channel_id']))]
                 messages.append(item)
             names={r[0]:r[1] for r in db.execute('SELECT DISTINCT discord_channel_id,discord_channel FROM files')}
-            categories={'common':'공통','plc':'PLC','vision':'PC','3d_model':'기구제작','meeting':'게시물'}
+            categories={'common':'공통','plc':'PLC','vision':'PC','3d_model':'기구제작','meeting':'게시물','robot_1a':'추가 프로젝트 1팀','robot_1b':'추가 프로젝트 2팀'}
             channels = [{'id': r['channel_id'], 'name': names.get(r['channel_id']) or
                          categories.get(r['category'],r['category'])+(' · 게시글 '+r['channel_id'][-4:] if r['parent_id'] else '')} for r in channel_rows]
             parents={r['parent_id']:r['category'] for r in channel_rows if r['parent_id'] in self.channels}
@@ -86,6 +90,8 @@ class Conversations:
             columns={r[1] for r in db.execute('PRAGMA table_info(conversation_messages)')}
             scope="m.guild_id=? AND m.channel_id=? AND trim(m.content)<>''"
             args=[anchor['guild_id'],anchor['channel_id']]
+            if self.scope is not None:
+                scope += " AND " + projects.predicate(self.scope, "m.category")
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_tombstones'").fetchone():
                 scope+=' AND NOT EXISTS (SELECT 1 FROM conversation_tombstones t WHERE t.message_id=m.message_id)'
             if days:
@@ -107,7 +113,7 @@ class Conversations:
                 item=dict(row)
                 item['url']=discord_url(row['guild_id'],row['channel_id'],row['message_id'])
                 item['files']=[dict(f) for f in db.execute('''SELECT id,original_filename FROM files
-                    WHERE discord_message_id=? AND discord_guild_id=? AND discord_channel_id=? ORDER BY id LIMIT 20''',
+                    WHERE discord_message_id=? AND discord_guild_id=? AND discord_channel_id=? AND ''' + (projects.predicate(self.scope) if self.scope is not None else '1=1') + ''' ORDER BY id LIMIT 20''',
                     (row['message_id'],row['guild_id'],row['channel_id']))]
                 output.append(item)
             return output
@@ -149,9 +155,9 @@ class Conversations:
         if not messages: return True
         with closing(self.connect()) as db:
             for source in messages:
-                row=db.execute('SELECT revision,channel_id,parent_id FROM conversation_messages WHERE message_id=? AND guild_id=?',
+                row=db.execute('SELECT revision,channel_id,parent_id,category FROM conversation_messages WHERE message_id=? AND guild_id=?',
                                (source['message_id'],source['guild_id'])).fetchone()
-                if (not row or row['revision']!=source['revision'] or row['channel_id']!=source['channel_id']
+                if (not row or (self.scope is not None and projects.category_scope(row['category']) != self.scope) or row['revision']!=source['revision'] or row['channel_id']!=source['channel_id']
                         or not ({row['channel_id'],row['parent_id']} & set(self.channels))): return False
                 if db.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_tombstones'").fetchone():
                     if db.execute('SELECT 1 FROM conversation_tombstones WHERE message_id=?',(source['message_id'],)).fetchone(): return False

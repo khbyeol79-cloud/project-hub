@@ -3,7 +3,20 @@ const $ = id => document.getElementById(id);
 let selected = null, offset = 0, generation = 0, searching = 0, busy = false, combinedFileOffset=0, combinedMessageOffset=0, combinedFilesMore=true, combinedMessagesMore=true, combinedFileBuffer=[], combinedMessageBuffer=[], combinedShownFiles=0, combinedShownMessages=0;
 const statusNames = {indexed:'본문 준비됨',partial:'일부 본문',pending:'본문 처리 대기',ocr_pending:'문자 인식 대기',failed:'본문 처리 실패',missing:'원본 파일 확인 필요',changed:'파일 변경 · 재처리 대기',encoding:'문자 해석 실패',encrypted:'암호화 · 원본으로 보기',too_large:'변환 크기 제한 · 원본으로 보기',binary_text:'본문 추출 불가',unsupported:'지원하지 않는 형식 · 원본으로 보기',no_text:'추출된 본문 없음'};
 function node(tag, text, cls) { const e=document.createElement(tag); if(text!==undefined)e.textContent=text; if(cls)e.className=cls; return e; }
-async function api(path, options={}) { const r=await fetch('/library/api/'+path,options); if(r.redirected||!r.headers.get('content-type')?.includes('application/json'))throw Error('자료실 연결을 확인해 주세요.');const data=await r.json();if(!r.ok)throw Error(data.error||'요청에 실패했습니다.');return data; }
+async function api(path, options={}) { const r=await fetch(scopedUrl('/library/api/'+path),options); if(r.redirected||!r.headers.get('content-type')?.includes('application/json'))throw Error('자료실 연결을 확인해 주세요.');const data=await r.json();if(!r.ok)throw Error(data.error||'요청에 실패했습니다.');return data; }
+let scopeVersion=0;
+function scopeParams(){return $('project').value==='additional'?{project:'additional',team:$('team').value}:{project:'main'};}
+function scopeName(){return $('project').value==='additional'?'추가 프로젝트 · '+$('team').selectedOptions[0].textContent:'기존 프로젝트 · 11명';}
+function scopedUrl(path){const url=new URL(path,location.origin);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));return url.pathname+url.search;}
+function itemUrl(key,id){const url=new URL(location.pathname,location.origin);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));url.searchParams.set(key,id);return url.pathname+url.search;}
+function chooseScope(){
+ scopeVersion++;generation++;searching++;selected=null;$('team').hidden=$('project').value!=='additional';
+ $('query').value='';$('channel').replaceChildren(new Option('모든 채널',''));$('extension').replaceChildren(new Option('모든 확장자',''));$('files').replaceChildren();$('count').textContent='';
+ $('pages').replaceChildren();$('file-versions').replaceChildren();$('document').hidden=$('ai-panel').hidden=$('weekly-panel').hidden=true;$('welcome').hidden=false;
+ $('answer').hidden=true;$('answer-body').textContent='';$('sources').replaceChildren();$('ai-status').textContent='';weeklyResult(null);$('weekly-files').replaceChildren();$('weekly-messages').replaceChildren();
+ history.replaceState(null,'',scopedUrl(location.pathname));scopeLabel();loadFiles();loadProcessing();
+}
+$('project').onchange=chooseScope;$('team').onchange=chooseScope;
 const size = n => n<1024*1024 ? Math.max(1,Math.round(n/1024))+' KB' : (n/1024/1024).toFixed(1)+' MB';
 async function loadFiles(append=false){if($('search-kind').value==='all')return loadCombined(append);if($('search-kind').value==='messages')return loadMessages(append);const seq=++searching; if(!append)offset=0; $('list-message').textContent='자료를 찾고 있어요…';$('more').hidden=true;
  try {const params=new URLSearchParams({q:$('query').value,channel:$('channel').value,extension:$('extension').value,sort:$('sort').dataset.sort,view:($('file-view').checked?'latest':'all'),days:$('message-days').value,offset}); const d=await api('files?'+params); if(seq!==searching)return;
@@ -14,18 +27,19 @@ async function loadFiles(append=false){if($('search-kind').value==='all')return 
 function tab(ai){scopeLabel();$('weekly-panel').hidden=true;$('document').hidden=ai||!selected;$('welcome').hidden=ai||Boolean(selected);$('ai-panel').hidden=!ai;document.querySelector('.reader').classList.add('open');if(ai){setSidebar(false);usage();document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});}}
 
 async function openFile(id,sourcePage=null){$('file-versions').replaceChildren();$('file-processing').hidden=true;setSidebar(false);const seq=++generation;selected=null;$('welcome').hidden=true;$('document').hidden=false;document.querySelector('.reader').classList.add('open');document.querySelector('.workspace').classList.add('reading');$('doc-title').textContent='자료를 여는 중…';$('pages').replaceChildren();$('doc-channel').textContent='';$('doc-meta').textContent='';$('download').hidden=true;$('drive-view').hidden=true;$('drive-view').removeAttribute('href');$('partial').hidden=true;tab(false);$('document').hidden=false;$('welcome').hidden=true;document.querySelectorAll('.file').forEach(e=>e.classList.toggle('selected',e.dataset.id===String(id)));
- try{const f=await api('files/'+id+(sourcePage?'?source_page='+encodeURIComponent(sourcePage):''));if(seq!==generation)return;setSidebar(false);selected=f;history.replaceState(null,'',location.pathname+'?file='+f.id);$('file-processing').textContent='수집 완료 · '+(statusNames[f.content_status]||'본문 상태 확인 필요')+' · '+uploadLabel(f.upload_status);$('file-processing').hidden=false;$('doc-title').textContent=f.original_filename;$('doc-channel').textContent=f.discord_channel;$('doc-meta').textContent=size(f.file_size_bytes)+' · '+String(f.uploaded_at).slice(0,10)+' · 자료 #'+f.id;$('download').href='/library/files/'+id+'/download';$('download').hidden=false;if(f.drive_url){$('drive-view').href=f.drive_url;$('drive-view').hidden=false;}$('partial').hidden=!f.partial;
- const preview=f.docx_preview?'/library/files/'+id+'/docx-preview':f.html_preview?'/library/files/'+id+'/html-preview':f.pdf_preview?'/library/files/'+id+'/preview':f.drive_preview_url;
+ try{const f=await api('files/'+id+(sourcePage?'?source_page='+encodeURIComponent(sourcePage):''));if(seq!==generation)return;setSidebar(false);selected=f;history.replaceState(null,'',itemUrl('file',f.id));$('file-processing').textContent='수집 완료 · '+(statusNames[f.content_status]||'본문 상태 확인 필요')+' · '+uploadLabel(f.upload_status);$('file-processing').hidden=false;$('doc-title').textContent=f.original_filename;$('doc-channel').textContent=f.discord_channel;$('doc-meta').textContent=size(f.file_size_bytes)+' · '+String(f.uploaded_at).slice(0,10)+' · 자료 #'+f.id;$('download').href=scopedUrl('/library/files/'+id+'/download');$('download').hidden=false;if(f.drive_url){$('drive-view').href=f.drive_url;$('drive-view').hidden=false;}$('partial').hidden=!f.partial;
+ const preview=f.docx_preview?scopedUrl('/library/files/'+id+'/docx-preview'):f.html_preview?scopedUrl('/library/files/'+id+'/html-preview'):f.pdf_preview?scopedUrl('/library/files/'+id+'/preview'):f.drive_preview_url;
  renderVersions(f);renderReading(f,preview);$('partial').hidden=true;updateButtons();if(matchMedia('(max-width:800px)').matches)document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});
  }catch(e){if(seq===generation){$('doc-title').textContent='자료를 열 수 없어요';$('pages').append(node('p',e.message,'empty'));}}}
 function updateButtons() {$('summarize').disabled=busy;$('ask-button').disabled=busy;}
 async function usage(){try{const s=await api('status');$('usage').textContent=s.enabled?'오늘 '+s.daily_calls+'/'+s.daily_limit+'회 · 이번 달 '+s.monthly_calls+'/'+s.monthly_limit+'회 사용':'AI 정리 기능이 꺼져 있어요.';}catch{}}
-async function runAI(task){if(busy)return;busy=true;updateButtons();$('ai-status').textContent='자료를 읽고 정리하고 있어요. 잠시 기다려 주세요…';$('answer').hidden=true;
+async function runAI(task){if(busy)return;const version=scopeVersion;busy=true;updateButtons();$('ai-status').textContent='자료를 읽고 정리하고 있어요. 잠시 기다려 주세요…';$('answer').hidden=true;
  try{const r=await api('ai',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({task,question:task==='ask'?$('question').value:'',days:Number($('message-days').value),channel:$('channel').value})});
+ if(version!==scopeVersion)return;
  $('answer').hidden=false;$('answer-label').textContent=(task==='ask'?'선택 범위 답변':'최근 자료 정리')+(r.cached?' · 저장된 결과':'');$('answer-body').textContent=r.answer;$('answer-partial').hidden=!r.partial;$('sources').replaceChildren();r.sources.forEach(s=>{if(s.kind==='message'){const a=node('a','['+s.id+'] '+s.label);if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(s.url||'')){a.href=s.url;a.target='_blank';a.rel='noopener noreferrer';}$('sources').append(a);return;}const b=node('button','['+s.id+'] '+s.label);b.onclick=async()=>{await openFile(s.file_id,s.page);tab(false);if($('extracted-text'))$('extracted-text').open=true;document.getElementById('page-'+s.page)?.scrollIntoView({behavior:'smooth'});};$('sources').append(b);});$('ai-status').textContent='';
- }catch(e){$('ai-status').textContent=e.message;}finally{busy=false;updateButtons();usage();}}
+ }catch(e){if(version===scopeVersion)$('ai-status').textContent=e.message;}finally{busy=false;updateButtons();usage();}}
 $('search').onsubmit=e=>{e.preventDefault();loadFiles();};$('channel').onchange=()=>{scopeLabel();loadFiles();};$('extension').onchange=()=>loadFiles();$('more').onclick=()=>loadFiles(true);$('tab-text').onclick=()=>tab(false);$('global-ai').onclick=()=>tab(true);$('sidebar-ai').onclick=()=>tab(true);$('summarize').onclick=()=>runAI('summary');$('ask').onsubmit=e=>{e.preventDefault();runAI('ask');};
-async function start(){const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname+location.search);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();loadProcessing();await openLinked();}start();
+async function start(){const initial=new URLSearchParams(location.search);if(initial.get('project')==='additional'&&['1a','1b'].includes(initial.get('team'))){$('project').value='additional';$('team').value=initial.get('team');$('team').hidden=false;}const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname+location.search);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();loadProcessing();await openLinked();}start();
 $('share').onclick=()=>copyItemLink($('share'));$('item-share').onclick=()=>copyItemLink($('item-share'));
 
 const mobile=matchMedia('(max-width:800px)');
@@ -54,7 +68,7 @@ async function loadMessages(append=false){
   $('list-message').textContent=!d.enabled?'대화 공개가 설정되지 않았습니다.':!$('files').children.length?'조건에 맞는 대화가 없어요.':'';
  }catch(e){if(seq===searching)$('list-message').textContent=e.message;}
 }
-function openMessage(m){$('file-versions').replaceChildren();$('file-processing').hidden=true;history.replaceState(null,'',location.pathname+'?message='+m.message_id);
+function openMessage(m){$('file-versions').replaceChildren();$('file-processing').hidden=true;history.replaceState(null,'',itemUrl('message',m.message_id));
  ++generation;selected={kind:'message',message_id:m.message_id};setSidebar(false);tab(false);
  $('doc-title').textContent=m.author_name+'님의 대화';$('doc-channel').textContent=m.category;
  $('doc-meta').textContent=new Date(m.created_at).toLocaleString('ko-KR')+(m.edited_at?' · 수정됨':'');
@@ -82,18 +96,19 @@ function weeklyResult(r){
  }else{const b=node('button','['+s.id+'] '+s.label,'secondary');b.onclick=()=>openFile(s.file_id,s.page);$('weekly-sources').append(b);}});
 }
 async function openWeekly(){
+ const version=scopeVersion;
  ++generation;setSidebar(false);$('welcome').hidden=true;$('document').hidden=true;$('ai-panel').hidden=true;$('weekly-panel').hidden=false;
  $('weekly-status').textContent='저장된 정리와 최근 자료를 불러오고 있어요…';
- try{const r=await api('weekly');weeklyResult(r.saved);$('weekly-status').textContent=r.saved?'':'저장된 정리가 없습니다. 버튼을 눌러 만들어 보세요.';
+ try{const r=await api('weekly');if(version!==scopeVersion)return;weeklyResult(r.saved);$('weekly-status').textContent=r.saved?'':'저장된 정리가 없습니다. 버튼을 눌러 만들어 보세요.';
  $('weekly-files').replaceChildren();r.files.forEach(f=>{const b=node('button',f.original_filename,'file');b.onclick=()=>openFile(f.id);$('weekly-files').append(b);});
  $('weekly-messages').replaceChildren();r.messages.forEach(m=>{const b=node('button',m.author_name+' · '+m.content.slice(0,100),'file');b.onclick=()=>openMessage(m);$('weekly-messages').append(b);});
- }catch(e){$('weekly-status').textContent=e.message;}
+ }catch(e){if(version===scopeVersion)$('weekly-status').textContent=e.message;}
 }
 $('weekly-open').onclick=openWeekly;
 $('weekly-generate').onclick=async()=>{
- if(weeklyBusy)return;weeklyBusy=true;$('weekly-generate').disabled=true;$('weekly-status').textContent='최근 7일 자료를 정리하고 있어요…';
- try{const r=await api('weekly',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:'{}'});weeklyResult(r);$('weekly-status').textContent='정리를 저장했습니다.';}
- catch(e){$('weekly-status').textContent=e.message;}finally{weeklyBusy=false;$('weekly-generate').disabled=false;usage();}
+ if(weeklyBusy)return;const version=scopeVersion;weeklyBusy=true;$('weekly-generate').disabled=true;$('weekly-status').textContent='최근 7일 자료를 정리하고 있어요…';
+ try{const r=await api('weekly',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:'{}'});if(version!==scopeVersion)return;weeklyResult(r);$('weekly-status').textContent='정리를 저장했습니다.';}
+ catch(e){if(version===scopeVersion)$('weekly-status').textContent=e.message;}finally{weeklyBusy=false;$('weekly-generate').disabled=false;usage();}
 };
 
 $('file-view').onchange=()=>loadFiles();
@@ -105,7 +120,7 @@ function renderVersions(f){
  f.related.forEach(r=>{const label=r.identical?'동일 내용':r.same_group?'수정본 후보':'관련 파일';const b=node('button',label+' · '+r.original_filename+' · '+r.discord_channel+' · '+new Date(r.uploaded_at).toLocaleString('ko-KR')+(r.id===f.latest_id?' · 최신 업로드':''),'file');b.onclick=()=>openFile(r.id);details.append(b);});box.append(details);
 }
 
-function scopeLabel(){const channel=$('channel').selectedOptions[0]?.textContent||'모든 채널';$('ai-scope').textContent='AI 참고 범위: '+channel+' · '+$('message-days').selectedOptions[0].textContent;}
+function scopeLabel(){const channel=$('channel').selectedOptions[0]?.textContent||'모든 채널';$('ai-scope').textContent='AI 참고 범위: '+scopeName()+' · '+channel+' · '+$('message-days').selectedOptions[0].textContent;}
 function excerpt(text,query){const start=Math.max(0,text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase())-60);return (start?'…':'')+text.slice(start,start+180);}
 async function loadCombined(append=false){
  const seq=++searching;
@@ -157,7 +172,7 @@ updateFilters();
 
 function uploadLabel(status){return {uploaded:'Drive 저장 완료',pending:'Drive 업로드 대기',failed:'Drive 업로드 실패 · 재시도 대기',needs_review:'Drive 업로드 확인 필요'}[status]||'Drive 상태 확인 전';}
 async function copyItemLink(button){
- try{const r=await api('share-link');const url=new URL(r.url);if(!$('document').hidden&&selected){if(selected.kind==='message')url.searchParams.set('message',selected.message_id);else if(selected.id)url.searchParams.set('file',selected.id);}
+ try{const r=await api('share-link');const url=new URL(r.url);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));if(!$('document').hidden&&selected){if(selected.kind==='message')url.searchParams.set('message',selected.message_id);else if(selected.id)url.searchParams.set('file',selected.id);}
  await navigator.clipboard.writeText(url.toString());const old=button.textContent;button.textContent='주소 복사됨 ✓';setTimeout(()=>button.textContent=old,2500);
  }catch(e){$('list-message').textContent='주소 복사 실패: '+e.message;}
 }
@@ -169,8 +184,9 @@ async function openLinked(){
  catch(e){$('list-message').textContent='대화를 열 수 없습니다. 삭제되었거나 공개 범위 밖일 수 있습니다.';}
 }
 async function loadProcessing(){
+ const version=scopeVersion;
  $('processing-refresh').disabled=true;
- try{const s=await api('processing'),c=s.content,d=s.drive;
+ try{const s=await api('processing');if(version!==scopeVersion)return;const c=s.content,d=s.drive;
  const health={healthy:'수집 확인 정상',attention:'수집 오류 확인 필요',stale:'최근 수집 확인이 지연되고 있습니다',unknown:'수집 상태 확인 전'}[s.collection];
  const time=s.last_checked_at?new Date(s.last_checked_at.includes('T')?s.last_checked_at:s.last_checked_at.replace(' ','T')+'Z').toLocaleString('ko-KR'):'기록 없음';
  $('processing-status').textContent=health+' · 마지막 확인 '+time+'\n등록 파일 '+s.total_files+'개\n본문 준비 '+(c.ready||0)+' · 일부 '+(c.partial||0)+' · 대기 '+(c.pending||0)+' · 실패 '+(c.failed||0)+' · 원본 보기 '+(c.original_only||0)+'\nDrive 완료 '+(d.uploaded||0)+' · 대기 '+(d.pending||0)+' · 실패 '+(d.failed||0)+' · 확인 필요 '+((d.needs_review||0)+(d.unknown||0));

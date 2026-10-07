@@ -128,7 +128,7 @@ def candidate_channels(guild_id, category=None):
             WHERE guild_id=? AND (? IS NULL OR category=?)''', (str(guild_id), category, category))]
 
 
-def find_messages(guild_id, channels, keyword, category=None, page=1):
+def find_messages(guild_id, channels, keyword, category=None, page=1, *, scope=None):
     needle = clean_text(keyword).casefold()
     if not needle or len(keyword) > 100 or not 1 <= page <= 10000:
         raise ValueError('Invalid conversation query')
@@ -138,6 +138,12 @@ def find_messages(guild_id, channels, keyword, category=None, page=1):
         conn.executemany('INSERT OR IGNORE INTO visible_channels VALUES (?)', [(str(cid),) for cid in channels])
         clause = '''m.guild_id=? AND m.channel_id IN (SELECT id FROM visible_channels)
             AND (? IS NULL OR m.category=?) AND instr(m.search_content,?)>0'''
+        if scope is not None:
+            if __package__:
+                from . import projects
+            else:
+                import projects
+            clause += ' AND ' + projects.predicate(scope, 'm.category')
         values = [str(guild_id), category, category, needle]
         total = conn.execute('SELECT COUNT(*) FROM conversation_messages m WHERE '+clause, values).fetchone()[0]
         rows = [dict(r) for r in conn.execute('''SELECT m.message_id,m.guild_id,m.channel_id,m.category,
@@ -157,7 +163,7 @@ class MessageArchive:
         self.client, self.channels, self.forums = client, dict(channels), dict(forums)
 
     def category(self, channel):
-        return self.channels.get(str(channel.id)) or self.forums.get(str(getattr(channel, 'parent_id', '')))
+        return self.channels.get(str(channel.id)) or self.channels.get(str(getattr(channel, 'parent_id', ''))) or self.forums.get(str(getattr(channel, 'parent_id', '')))
 
     async def save(self, message, *, upload=False):
         category = self.category(message.channel)

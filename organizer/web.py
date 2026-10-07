@@ -22,6 +22,7 @@ from .documents import Documents, SUFFIXES
 from .retrieval import retrieve
 from .conversations import Conversations
 from . import versions
+from bot import projects
 
 TEXT_PREVIEW_SUFFIXES = {'.md', '.markdown', '.txt', '.py', '.c', '.cpp', '.h', '.hpp', '.java',
                          '.js', '.ts', '.json', '.csv', '.yaml', '.yml', '.ini', '.cfg', '.css'}
@@ -47,7 +48,6 @@ def create_app(config=None, ai=None):
     documents=Documents(app.config['DB_PATH'],app.config['STORAGE'],
                         app.config['DOCUMENT_CACHE'] or Path(app.config['DB_PATH']).parent/'library-text.db')
     app.extensions['documents']=documents
-    conversations=Conversations(app.config['DB_PATH'],app.config['MESSAGE_CHANNELS'])
     ai_lock = threading.Lock()
     access_lock = threading.Lock()
     access_attempts = deque()
@@ -59,6 +59,31 @@ def create_app(config=None, ai=None):
         db.row_factory = sqlite3.Row
         db.create_function('file_ext',1,lambda name: Path(name or '').suffix.lower() or '(none)',deterministic=True)
         return db
+
+    def request_scope():
+        try:
+            return projects.select(request.args.get('project', 'main'), request.args.get('team', ''))
+        except ValueError:
+            abort(400)
+
+    def scoped_conversations():
+        scope = request_scope()
+        teams = dict(projects.TEAM_CHANNEL_IDS)
+        with closing(connect()) as db:
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_messages'").fetchone():
+                teams.update(db.execute(
+                    "SELECT DISTINCT channel_id,category FROM conversation_messages WHERE guild_id=? AND category IN ('robot_1a','robot_1b')",
+                    (projects.GUILD_ID,)))
+        # Preserve the original publication allowlist. Publish only the requested
+        # team channels within the verified server for the additional project.
+        if scope == 'main':
+            channels = set(str(c) for c in app.config['MESSAGE_CHANNELS']) - set(teams)
+        else:
+            channels = {cid for cid, category in teams.items() if projects.category_scope(category) == scope}
+        return Conversations(app.config['DB_PATH'], channels, scope)
+
+    def weekly_file():
+        return weekly_path.with_name('weekly-summary-' + request_scope() + '.json')
 
     @app.before_request
     def authenticate():
@@ -155,7 +180,7 @@ def create_app(config=None, ai=None):
             if days not in {0,7,30}: raise ValueError()
         except ValueError:
             abort(400)
-        conditions, params = [], []
+        conditions, params = [projects.predicate(request_scope(),'f.category')], []
         if days:
             conditions.append('julianday(f.uploaded_at)>=julianday(?)')
             params.append((datetime.now(timezone.utc)-timedelta(days=days)).isoformat())
@@ -184,8 +209,8 @@ def create_app(config=None, ai=None):
         with closing(connect()) as db:
             rows = db.execute('SELECT ' + FIELDS + ' FROM files f LEFT JOIN content_documents d ON d.file_id=f.id'
                               + where + ' ORDER BY '+order+' LIMIT 31 OFFSET ?', params + [offset]).fetchall()
-            channels = [dict(r) for r in db.execute('SELECT DISTINCT discord_channel_id AS id, discord_channel AS name FROM files ORDER BY name')]
-            extensions=[r[0] for r in db.execute('SELECT DISTINCT file_ext(original_filename) FROM files ORDER BY 1')]
+            channels = [dict(r) for r in db.execute('SELECT DISTINCT discord_channel_id AS id, discord_channel AS name FROM files f WHERE '+projects.predicate(request_scope(),'f.category')+' ORDER BY name')]
+            extensions=[r[0] for r in db.execute('SELECT DISTINCT file_ext(original_filename) FROM files f WHERE '+projects.predicate(request_scope(),'f.category')+' ORDER BY 1')]
             total=db.execute('SELECT count(*) FROM files f'+where,params).fetchone()[0]
             relationships={r['id']:versions.info(db,r['id']) for r in rows[:30]}
             previews={}
@@ -219,6 +244,7 @@ def create_app(config=None, ai=None):
             if sort not in {'date_desc','date_asc'}: raise ValueError()
             if days not in {0,7,30} or not 0<=offset<=100000: raise ValueError()
         except ValueError: abort(400)
+        conversations=scoped_conversations()
         result=conversations.search(request.args.get('q','').strip()[:100],
                                     request.args.get('channel','')[:100],days,offset,sort=sort)
         result['enabled']=bool(conversations.channels)
@@ -227,7 +253,7 @@ def create_app(config=None, ai=None):
     @app.get('/library/api/messages/<message_id>')
     def message_detail(message_id):
         if not re.fullmatch(r'[0-9]{1,20}',message_id): abort(404)
-        rows=conversations.search(message_id=message_id,limit=1)['messages']
+        rows=scoped_conversations().search(message_id=message_id,limit=1)['messages']
         if not rows: abort(404)
         return jsonify(rows[0])
 
@@ -235,10 +261,10 @@ def create_app(config=None, ai=None):
     def processing_status():
         from .processing import snapshot
         with closing(connect()) as db:
-            return jsonify(snapshot(db,documents.cache,app.config['MESSAGE_CHANNELS']))
+            return jsonify(snapshot(db,documents.cache,scoped_conversations().channels,request_scope()))
 
     def file_row(db, file_id):
-        row = db.execute('SELECT ' + FIELDS + ', f.local_path FROM files f LEFT JOIN content_documents d ON d.file_id=f.id WHERE f.id=?', (file_id,)).fetchone()
+        row = db.execute('SELECT ' + FIELDS + ', f.local_path FROM files f LEFT JOIN content_documents d ON d.file_id=f.id WHERE f.id=? AND '+projects.predicate(request_scope(),'f.category'), (file_id,)).fetchone()
         if not row:
             abort(404)
         return dict(row)
@@ -390,17 +416,19 @@ def create_app(config=None, ai=None):
         since=(datetime.now(timezone.utc)-timedelta(days=7)).isoformat()
         with closing(connect()) as db:
             files=[dict(r) for r in db.execute('''SELECT id,original_filename,uploaded_at FROM files
-                WHERE julianday(uploaded_at)>=julianday(?) ORDER BY julianday(uploaded_at) DESC LIMIT 8''',(since,))]
-        messages=conversations.search(days=7,limit=8)['messages']
+                WHERE julianday(uploaded_at)>=julianday(?) AND '''+projects.predicate(request_scope())+''' ORDER BY julianday(uploaded_at) DESC LIMIT 8''',(since,))]
+        messages=scoped_conversations().search(days=7,limit=8)['messages']
         return since,files,messages
 
     @app.get('/library/api/weekly')
     def weekly_get():
+        conversations=scoped_conversations()
+        path=weekly_file()
         since,files,messages=weekly_data()
         saved=None
-        if weekly_path.exists():
-            candidate=json.loads(weekly_path.read_text(encoding='utf-8'))
-            valid=conversations.current(candidate['checks'])
+        if path.exists():
+            candidate=json.loads(path.read_text(encoding='utf-8'))
+            valid=candidate.get('scope')==request_scope() and conversations.current(candidate['checks'])
             with closing(connect()) as db:
                 for fid,sha in candidate['file_hashes'].items():
                     row=db.execute('SELECT sha256 FROM files WHERE id=?',(fid,)).fetchone()
@@ -414,10 +442,12 @@ def create_app(config=None, ai=None):
         if not ai_lock.acquire(blocking=False):
             return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'),429
         try:
+            conversations=scoped_conversations()
+            path=weekly_file()
             since,_,_=weekly_data()
             chats=conversations.sources('',7,ai.settings.max_chars//2)
             sources=retrieve(app.config['DB_PATH'],documents,'',
-                ai.settings.max_chars-sum(len(s['text']) for s in chats),since=since)+chats
+                ai.settings.max_chars-sum(len(s['text']) for s in chats),since=since,scope=request_scope())+chats
             if not sources: return jsonify(error='최근 7일간 정리할 본문이나 공개 대화가 없습니다.'),422
             with closing(connect()) as db:
                 hashes={str(s['file_id']):db.execute('SELECT sha256 FROM files WHERE id=?',
@@ -430,11 +460,11 @@ def create_app(config=None, ai=None):
                 for fid,sha in hashes.items():
                     row=db.execute('SELECT sha256 FROM files WHERE id=?',(fid,)).fetchone()
                     if not row or row['sha256']!=sha: raise AIError('파일이 변경되었습니다. 다시 정리해 주세요.')
-            snapshot={'result':result,'checks':[{k:v for k,v in s.items() if k!='text'} for s in chats],'file_hashes':hashes}
-            temp=weekly_path.with_suffix('.tmp')
+            snapshot={'scope':request_scope(),'result':result,'checks':[{k:v for k,v in s.items() if k!='text'} for s in chats],'file_hashes':hashes}
+            temp=path.with_suffix('.tmp')
             fd=os.open(temp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
             with os.fdopen(fd,'w',encoding='utf-8') as output: json.dump(snapshot,output,ensure_ascii=False)
-            temp.replace(weekly_path)
+            temp.replace(path)
             return jsonify(result)
         finally: ai_lock.release()
 
@@ -452,13 +482,14 @@ def create_app(config=None, ai=None):
         if not ai_lock.acquire(blocking=False):
             return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'),429
         try:
+            conversations=scoped_conversations()
             needle=question if data['task']=='ask' else ''
             chat_sources=conversations.sources(needle,days,ai.settings.max_chars//2,channel=channel)
             related_files={fid for source in chat_sources for fid in source.get('attachment_ids',[])}
             sources=retrieve(app.config['DB_PATH'],documents,needle,
                              ai.settings.max_chars-sum(len(s['text']) for s in chat_sources),
                              related_file_ids=related_files,channel=channel,
-                             since=(datetime.now(timezone.utc)-timedelta(days=days)).isoformat() if days else None) + chat_sources
+                             since=(datetime.now(timezone.utc)-timedelta(days=days)).isoformat() if days else None,scope=request_scope()) + chat_sources
             if not sources:
                 return jsonify(answer='관련 파일 본문이나 공개된 대화를 찾지 못했습니다. 구체적인 용어로 질문해 주세요.',sources=[],partial=True,cached=False,matched_files=0,matched_messages=0)
             result=ai.run(data['task'],sources,question,True)
@@ -482,6 +513,8 @@ def create_app(config=None, ai=None):
         if not ai_lock.acquire(blocking=False):
             return jsonify(error='다른 자료를 정리 중입니다. 잠시 후 다시 시도해 주세요.'), 429
         try:
+            with closing(connect()) as db:
+                file_row(db,file_id)
             extra=documents.get(file_id)
             if extra:
                 if not extra['pages']:

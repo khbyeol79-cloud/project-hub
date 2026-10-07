@@ -11,12 +11,12 @@ import discord
 from discord import app_commands
 
 if __package__:
-    from . import database
+    from . import database, projects
     from . import content_search
     from . import message_archive
     from .drive import CATEGORY_FOLDERS
 else:
-    import database
+    import database, projects
     import content_search
     import message_archive
     from drive import CATEGORY_FOLDERS
@@ -26,21 +26,26 @@ PAGE_SIZE = 5
 KST = timezone(timedelta(hours=9))
 CATEGORY_LABELS = {"common": "공통", "3d_model": "기구제작", "vision": "PC",
                    "plc": "PLC", "meeting": "게시물", "robot": "로봇",
-                   "arduino": "아두이노", "final": "최종자료"}
+                   "arduino": "아두이노", "final": "최종자료",
+                   "robot_1a": "추가 프로젝트 1팀", "robot_1b": "추가 프로젝트 2팀"}
 CHOICES = [app_commands.Choice(name=CATEGORY_LABELS.get(key, value), value=key)
            for key, value in CATEGORY_FOLDERS.items()]
+
+SCOPE_CHOICES = [app_commands.Choice(name=label, value=key) for key, label in projects.LABELS.items()]
 
 
 def normalize(value):
     return unicodedata.normalize("NFC", value or "").casefold()
 
 
-def filters(guild_id, keyword, category):
+def filters(guild_id, keyword, category, scope=None):
     if not str(guild_id).isascii() or not str(guild_id).isdecimal():
         raise ValueError("Invalid server")
     if len(keyword) > 100 or (category is not None and category not in CATEGORY_FOLDERS):
         raise ValueError("Invalid search")
     clause, values = "discord_guild_id = ?", [str(guild_id)]
+    if scope is not None:
+        clause += " AND " + projects.predicate(scope)
     if keyword:
         clause += " AND instr(search_name(original_filename), ?) > 0"
         values.append(normalize(keyword))
@@ -58,11 +63,11 @@ def candidate_channels(guild_id, keyword="", category=None):
             "SELECT DISTINCT discord_channel_id FROM files WHERE " + clause, values)]
 
 
-def find_files(guild_id, channels, keyword="", category=None, page=1):
+def find_files(guild_id, channels, keyword="", category=None, page=1, *, scope=None):
     """Apply visibility before counting/paging; never return private local paths."""
     if not 1 <= page <= 10000:
         raise ValueError("Invalid page")
-    clause, values = filters(guild_id, keyword, category)
+    clause, values = filters(guild_id, keyword, category, scope)
     with closing(database.get_connection()) as conn:
         conn.row_factory = sqlite3.Row
         conn.create_function("search_name", 1, normalize, deterministic=True)
@@ -79,7 +84,7 @@ def find_files(guild_id, channels, keyword="", category=None, page=1):
         return [dict(row) for row in rows], total
 
 
-def find_versions(guild_id, channels, keyword, category=None, page=1):
+def find_versions(guild_id, channels, keyword, category=None, page=1, *, scope=None):
     """Number content changes within a visible channel/category/filename history.
 
     Consecutive equal hashes share a version; reverting A -> B -> A creates V3.
@@ -87,7 +92,7 @@ def find_versions(guild_id, channels, keyword, category=None, page=1):
     """
     if not 1 <= page <= 10000 or not keyword.strip():
         raise ValueError("Invalid version search")
-    clause, values = filters(guild_id, keyword, category)
+    clause, values = filters(guild_id, keyword, category, scope)
     clause += " AND discord_channel_id IN (SELECT id FROM visible_channels)"
     # All permission and server filtering happens before any window function.
     history = """WITH source AS (
@@ -249,65 +254,65 @@ class SearchCommands:
 
         @self.tree.command(name="검색", description="저장된 파일을 파일명으로 검색합니다.")
         @app_commands.guild_only()
-        @app_commands.rename(keyword="키워드", category="분류", page="페이지")
+        @app_commands.rename(keyword="키워드", category="분류", page="페이지", scope="자료범위")
         @app_commands.describe(keyword="파일명에 들어 있는 글자", category="찾을 자료 분류", page="5개씩 표시할 페이지")
-        @app_commands.choices(category=CHOICES)
+        @app_commands.choices(category=CHOICES, scope=SCOPE_CHOICES)
         @app_commands.checks.cooldown(1, 3.0, key=lambda i: (i.guild_id, i.user.id))
         async def search(interaction: discord.Interaction, keyword: app_commands.Range[str, 1, 100],
-                         category: str = None, page: app_commands.Range[int, 1, 10000] = 1):
+                         category: str = None, page: app_commands.Range[int, 1, 10000] = 1, scope: str = None):
             if not keyword.strip():
                 await interaction.response.send_message("검색할 파일명을 입력해 주세요.", ephemeral=True)
                 return
-            await self.respond(interaction, keyword.strip(), category, page)
+            await self.respond(interaction, keyword.strip(), category, page, scope=scope)
 
         @self.tree.command(name="최근파일", description="최근에 올라온 파일을 최신순으로 봅니다.")
         @app_commands.guild_only()
-        @app_commands.rename(category="분류", page="페이지")
+        @app_commands.rename(category="분류", page="페이지", scope="자료범위")
         @app_commands.describe(category="찾을 자료 분류", page="5개씩 표시할 페이지")
-        @app_commands.choices(category=CHOICES)
+        @app_commands.choices(category=CHOICES, scope=SCOPE_CHOICES)
         @app_commands.checks.cooldown(1, 3.0, key=lambda i: (i.guild_id, i.user.id))
         async def recent(interaction: discord.Interaction, category: str = None,
-                         page: app_commands.Range[int, 1, 10000] = 1):
-            await self.respond(interaction, "", category, page)
+                         page: app_commands.Range[int, 1, 10000] = 1, scope: str = None):
+            await self.respond(interaction, "", category, page, scope=scope)
 
         @self.tree.command(name="버전", description="같은 파일의 최신본과 이전 버전 이력을 봅니다.")
         @app_commands.guild_only()
-        @app_commands.rename(keyword="키워드", category="분류", page="페이지")
+        @app_commands.rename(keyword="키워드", category="분류", page="페이지", scope="자료범위")
         @app_commands.describe(keyword="버전을 확인할 파일명의 일부", category="찾을 자료 분류", page="5개씩 표시할 페이지")
-        @app_commands.choices(category=CHOICES)
+        @app_commands.choices(category=CHOICES, scope=SCOPE_CHOICES)
         @app_commands.checks.cooldown(1, 3.0, key=lambda i: (i.guild_id, i.user.id))
         async def versions(interaction: discord.Interaction, keyword: app_commands.Range[str, 1, 100],
-                           category: str = None, page: app_commands.Range[int, 1, 10000] = 1):
+                           category: str = None, page: app_commands.Range[int, 1, 10000] = 1, scope: str = None):
             if not keyword.strip():
                 await interaction.response.send_message("버전을 확인할 파일명을 입력해 주세요.", ephemeral=True)
                 return
-            await self.respond(interaction, keyword.strip(), category, page, versions=True)
+            await self.respond(interaction, keyword.strip(), category, page, versions=True, scope=scope)
 
         @self.tree.command(name="내용검색", description="PDF·TXT·Word·Excel·사진에서 내용을 찾습니다. 스캔·사진 OCR 지원")
         @app_commands.guild_only()
-        @app_commands.rename(keyword="키워드", category="분류", page="페이지")
+        @app_commands.rename(keyword="키워드", category="분류", page="페이지", scope="자료범위")
         @app_commands.describe(keyword="본문에서 찾을 단어나 문구", category="찾을 자료 분류", page="5개씩 표시할 페이지")
-        @app_commands.choices(category=CHOICES)
+        @app_commands.choices(category=CHOICES, scope=SCOPE_CHOICES)
         @app_commands.checks.cooldown(1, 3.0, key=lambda i: (i.guild_id, i.user.id))
         async def content(interaction: discord.Interaction, keyword: app_commands.Range[str, 1, 100],
-                          category: str = None, page: app_commands.Range[int, 1, 10000] = 1):
+                          category: str = None, page: app_commands.Range[int, 1, 10000] = 1, scope: str = None):
             if not content_search.clean_text(keyword):
                 await interaction.response.send_message("본문에서 찾을 검색어를 입력해 주세요.", ephemeral=True)
                 return
-            await self.respond_content(interaction, keyword.strip(), category, page)
+            await self.respond_content(interaction, keyword.strip(), category, page, scope=scope)
 
         @self.tree.command(name="대화검색", description="저장된 채널·게시물 대화에서 단어나 문구를 찾습니다.")
         @app_commands.guild_only()
-        @app_commands.rename(keyword="키워드", category="분류", page="페이지")
+        @app_commands.rename(keyword="키워드", category="분류", page="페이지", scope="자료범위")
         @app_commands.describe(keyword="대화에서 찾을 단어나 문구", category="찾을 자료 분류", page="5개씩 표시할 페이지")
-        @app_commands.choices(category=CHOICES)
+        @app_commands.choices(category=CHOICES, scope=SCOPE_CHOICES)
         @app_commands.checks.cooldown(1, 3.0, key=lambda i: (i.guild_id, i.user.id))
         async def conversations(interaction: discord.Interaction, keyword: app_commands.Range[str, 1, 100],
-                                category: str = None, page: app_commands.Range[int, 1, 10000] = 1):
+                                category: str = None, page: app_commands.Range[int, 1, 10000] = 1, scope: str = None):
             if not content_search.clean_text(keyword):
                 await interaction.response.send_message("대화에서 찾을 검색어를 입력해 주세요.", ephemeral=True)
                 return
-            await self.respond_conversations(interaction, keyword.strip(), category, page)
+            await self.respond_conversations(interaction, keyword.strip(), category, page, scope=scope)
 
         if __package__:
             from .assistant_commands import CommandSuite
@@ -315,16 +320,22 @@ class SearchCommands:
             from assistant_commands import CommandSuite
         self.extra_commands = CommandSuite(self)
 
-    async def respond_conversations(self, interaction, keyword, category, page):
+    def narrow(self, interaction, candidates, selected=None):
+        scope = projects.invocation_scope(interaction, selected)
+        with closing(database.get_connection()) as db:
+            return projects.scoped_channels(db, candidates, scope)
+
+    async def respond_conversations(self, interaction, keyword, category, page, *, scope=None):
         if interaction.guild_id is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message("서버 안에서 사용해 주세요.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         candidates = await asyncio.to_thread(message_archive.candidate_channels, interaction.guild_id, category)
+        candidates = await asyncio.to_thread(self.narrow, interaction, candidates, scope)
         allowed = await asyncio.wait_for(
             visible_channels(self.client, interaction.user, interaction.guild_id, candidates), timeout=25)
         rows, total = await asyncio.to_thread(message_archive.find_messages,
-            interaction.guild_id, allowed, keyword, category, page)
+            interaction.guild_id, allowed, keyword, category, page, scope=projects.invocation_scope(interaction, scope))
         embed = discord.Embed(title="대화 검색", colour=0x386FAD,
             description=f"대화: {display_text(keyword)}\n분류: {CATEGORY_LABELS.get(category, '전체')}")
         if not rows:
@@ -349,18 +360,20 @@ class SearchCommands:
         if page < pages:
             footer += f" · 다음: 페이지 {page + 1}"
         embed.set_footer(text=footer)
+        embed.description = projects.LABELS[projects.invocation_scope(interaction, scope)] + '\n' + (embed.description or '')
         await interaction.edit_original_response(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
-    async def respond_content(self, interaction, keyword, category, page):
+    async def respond_content(self, interaction, keyword, category, page, *, scope=None):
         if interaction.guild_id is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message("서버 안에서 사용해 주세요.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         candidates = await asyncio.to_thread(candidate_channels, interaction.guild_id, "", category)
+        candidates = await asyncio.to_thread(self.narrow, interaction, candidates, scope)
         allowed = await asyncio.wait_for(
             visible_channels(self.client, interaction.user, interaction.guild_id, candidates), timeout=25)
         rows, total, states = await asyncio.to_thread(
-            content_search.find_content, interaction.guild_id, allowed, keyword, category, page)
+            content_search.find_content, interaction.guild_id, allowed, keyword, category, page, scope=projects.invocation_scope(interaction, scope))
         embed = result_embed(rows, total, "", category, page)
         embed.title = "파일 내용 검색"
         embed.description = f"본문: {display_text(keyword)}\n분류: {CATEGORY_LABELS.get(category, '전체')} · PDF/TXT/DOCX/XLSX/사진 OCR"
@@ -387,19 +400,23 @@ class SearchCommands:
         if any('OCR' in row.get('location', '') for row in rows):
             footer += " · OCR 인식 내용은 원본으로 확인하세요"
         embed.set_footer(text=footer)
+        embed.description = projects.LABELS[projects.invocation_scope(interaction, scope)] + '\n' + (embed.description or '')
         await interaction.edit_original_response(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
-    async def respond(self, interaction, keyword, category, page, *, versions=False):
+    async def respond(self, interaction, keyword, category, page, *, versions=False, scope=None):
         if interaction.guild_id is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message("서버 안에서 사용해 주세요.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
         candidates = await asyncio.to_thread(candidate_channels, interaction.guild_id, keyword, category)
+        candidates = await asyncio.to_thread(self.narrow, interaction, candidates, scope)
         allowed = await asyncio.wait_for(
             visible_channels(self.client, interaction.user, interaction.guild_id, candidates), timeout=25)
         query = find_versions if versions else find_files
-        rows, total = await asyncio.to_thread(query, interaction.guild_id, allowed, keyword, category, page)
-        await interaction.edit_original_response(embed=result_embed(rows, total, keyword, category, page, versions=versions),
+        rows, total = await asyncio.to_thread(query, interaction.guild_id, allowed, keyword, category, page, scope=projects.invocation_scope(interaction, scope))
+        embed=result_embed(rows, total, keyword, category, page, versions=versions)
+        embed.description=projects.LABELS[projects.invocation_scope(interaction, scope)]+'\n'+embed.description
+        await interaction.edit_original_response(embed=embed,
                                                  allowed_mentions=discord.AllowedMentions.none())
 
     async def sync(self, configured_channels):

@@ -6,14 +6,16 @@ import json
 from pathlib import Path
 import sqlite3
 from .documents import SUFFIXES
+from bot import projects
 
 
-def snapshot(db,cache,channels):
+def snapshot(db,cache,channels,scope=None):
     columns={r[1] for r in db.execute('PRAGMA table_info(files)')}
     upload='f.upload_status' if 'upload_status' in columns else "'unknown'"
     rows=db.execute('''SELECT f.id,f.original_filename,f.sha256,'''+upload+''' AS upload,
         CASE WHEN d.source_sha256=f.sha256 THEN d.status ELSE 'pending' END AS content
-        FROM files f LEFT JOIN content_documents d ON d.file_id=f.id''').fetchall()
+        FROM files f LEFT JOIN content_documents d ON d.file_id=f.id''' +
+        (' WHERE '+projects.predicate(scope,'f.category') if scope is not None else '')).fetchall()
     with closing(sqlite3.connect(Path(cache).resolve().as_uri()+'?mode=ro',uri=True)) as saved:
         extra={r[0]:(r[1],json.loads(r[2]).get('status','pending')) for r in saved.execute('SELECT id,sha,result FROM documents WHERE id>0')}
     counts=Counter();uploads=Counter()

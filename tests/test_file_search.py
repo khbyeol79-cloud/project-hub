@@ -171,7 +171,7 @@ class CommandTests(CatalogueFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual([c.name for c in commands], ["검색", "최근파일", "버전", "내용검색", "대화검색", "도움말", "찾기", "상태", "파일정보", "요약", "질문"])
         payload = commands[0].to_dict(self.commands.tree)
         self.assertTrue(commands[0].guild_only)
-        self.assertEqual([o["name"] for o in payload["options"]], ["키워드", "분류", "페이지"])
+        self.assertEqual([o["name"] for o in payload["options"]], ["키워드", "분류", "페이지", "자료범위"])
         self.assertEqual({o["value"] for o in payload["options"][1]["choices"]}, set(search.CATEGORY_FOLDERS))
 
     async def test_search_response_is_private_filtered_and_deferred(self):

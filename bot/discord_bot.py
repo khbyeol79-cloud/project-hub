@@ -6,13 +6,14 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from contextlib import closing
 from pathlib import Path
 
 import discord
 from dotenv import load_dotenv
 
 if __package__:
-    from . import database
+    from . import database, projects
     from .drive import CATEGORY_FOLDERS
     from .upload_queue import UploadWorker, write_metadata
     from .history import HistoryCollector
@@ -21,7 +22,7 @@ if __package__:
     from .content_search import ContentIndexer, initialize as initialize_content
     from . import message_archive
 else:
-    import database
+    import database, projects
     from drive import CATEGORY_FOLDERS
     from upload_queue import UploadWorker, write_metadata
     from history import HistoryCollector
@@ -50,6 +51,8 @@ def load_channel_map(section="channels"):
         for key, category in channels.items()
     ):
         raise ValueError("channels.json의 채널 ID와 카테고리를 확인하세요.")
+    if section == "channels" and CONFIG_PATH == BASE_DIR / "config" / "channels.json":
+        channels.update(projects.TEAM_CHANNEL_IDS)
     return channels
 
 
@@ -150,8 +153,38 @@ client = CollectorClient(intents=intents)
 search_commands = SearchCommands(client)
 
 
+async def connect_project_channels():
+    guild = client.get_guild(int(projects.GUILD_ID))
+    if guild is None:
+        return
+    resolved = projects.discover(guild.text_channels)
+    with closing(database.get_connection()) as db:
+        saved = projects.stored_channels(db)
+    current = {str(c.id) for c in guild.text_channels}
+    resolved.update({cid: category for cid, category in saved.items() if cid in current})
+    CHANNEL_MAP.update(resolved)
+    for collector in (client.history_collector, client.message_collector):
+        if collector:
+            collector.channel_ids = tuple(CHANNEL_MAP)
+            collector.forum_ids = tuple(dict.fromkeys([*FORUM_MAP, *resolved]))
+            collector.initialize()
+            collector.wakeup.set()
+    if client.message_archive:
+        client.message_archive.channels.update(CHANNEL_MAP)
+    if client.health_monitor:
+        client.health_monitor.channel_map.update(CHANNEL_MAP)
+    logger.info('PROJECT_CHANNELS_READY | teams=%d', len(resolved))
+
+
+@client.event
+async def on_guild_channel_create(channel):
+    if str(getattr(getattr(channel, 'guild', None), 'id', '')) == projects.GUILD_ID:
+        await connect_project_channels()
+
+
 @client.event
 async def on_ready():
+    await connect_project_channels()
     logger.info("Discord 로그인 완료 | bot=%s | 감지채널=%d", client.user, len(CHANNEL_MAP))
     logger.info("FORUM_COLLECTION | forums=%d", len(FORUM_MAP))
     if client.history_collector:
@@ -173,9 +206,9 @@ async def on_resumed():
 
 @client.event
 async def on_thread_create(thread):
-    if str(thread.parent_id) in FORUM_MAP and client.history_collector:
+    if str(thread.parent_id) in {**CHANNEL_MAP, **FORUM_MAP} and client.history_collector:
         client.history_collector.wakeup.set()
-    if str(thread.parent_id) in FORUM_MAP and client.message_collector:
+    if str(thread.parent_id) in {**CHANNEL_MAP, **FORUM_MAP} and client.message_collector:
         client.message_collector.wakeup.set()
 
 
@@ -196,7 +229,7 @@ async def collect_attachment(message, attachment, index, category):
     finally:
         temporary.unlink(missing_ok=True)
     sha256 = await asyncio.to_thread(calculate_sha256, save_path)
-    duplicate = database.find_existing_file(attachment.filename, sha256)
+    duplicate = database.find_existing_file(attachment.filename, sha256, category, message.guild.id if message.guild else None)
     channel_id = str(message.channel.id)
     metadata = {
         "discord_message_id": str(message.id),
@@ -233,14 +266,14 @@ async def collect_attachment(message, attachment, index, category):
 async def process_message(message, *, upload=True):
     channel_id = str(message.channel.id)
     parent_id = str(getattr(message.channel, "parent_id", ""))
-    category = CHANNEL_MAP.get(channel_id) or FORUM_MAP.get(parent_id)
+    category = CHANNEL_MAP.get(channel_id) or CHANNEL_MAP.get(parent_id) or FORUM_MAP.get(parent_id)
     if message.author.bot or not message.attachments or category is None:
         return True
     complete = True
     for index, attachment in enumerate(message.attachments, start=1):
         try:
             async with collection_lock:
-                if parent_id in FORUM_MAP:
+                if parent_id in FORUM_MAP or parent_id in CHANNEL_MAP:
                     database.initialize_channel_cursor(channel_id, 0)
                 file_id, created = await collect_attachment(message, attachment, index, category)
             if created and upload:
