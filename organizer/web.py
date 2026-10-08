@@ -172,6 +172,21 @@ def create_app(config=None, ai=None):
         url = Photos.folder_url(app.config['PHOTO_FOLDER_ID']) if scope == 'main' else None
         return jsonify(error=message, folder_url=url), 503
 
+    @app.get('/library/api/photos/count')
+    def photo_count():
+        scope = request_scope()
+        try:
+            days = int(request.args.get('days', '0'))
+        except ValueError:
+            abort(400)
+        if days not in {0, 7, 30}:
+            abort(400)
+        try:
+            return jsonify(total_count=app.extensions['photos'].count(scope, days))
+        except Exception as exc:
+            app.logger.warning('PHOTO_COUNT_FAILED type=%s', type(exc).__name__)
+            return jsonify(error='전체 사진 수를 확인하지 못했습니다. 새로고침해 주세요.'), 503
+
     @app.get('/library/photos/<file_id>/thumbnail')
     def photo_thumbnail(file_id):
         scope = request_scope()

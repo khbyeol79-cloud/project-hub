@@ -22,6 +22,7 @@ class PhotoTests(unittest.TestCase):
         self.assertIn("'photos_root' in parents",args['q'])
         self.assertIn('createdTime >=',args['q'])
         self.assertEqual(args['pageToken'],'page')
+        self.assertEqual(args['pageSize'],12)
         self.assertEqual(args['orderBy'],'createdTime,name')
         self.assertEqual([x['id'] for x in result['photos']],['pic1'])
         self.assertEqual(result['next_page_token'],'next')
@@ -73,20 +74,77 @@ class PhotoTests(unittest.TestCase):
             with self.assertRaises(PhotoError):photo_service(Path(folder)/'missing.json')
             flow.assert_not_called()
 
+    def test_count_walks_empty_pages_and_counts_only_unique_scoped_images(self):
+        self.service.files().list().execute.side_effect = [
+            {'nextPageToken':'p2','files':[{'id':'pic1','parents':['photos_root']},
+                {'id':'outside','parents':['private']}, {'id':'bad/id','parents':['photos_root']}]},
+            {'nextPageToken':'p3','files':[]},
+            {'files':[{'id':'pic1','parents':['photos_root']}, {'id':'pic2','parents':['photos_root']}]}]
+        self.assertEqual(self.photos.count('main',7),2)
+        calls=[c for c in self.service.files().list.call_args_list if c.kwargs]
+        self.assertEqual([c.kwargs['pageToken'] for c in calls],[None,'p2','p3'])
+        for c in calls:
+            self.assertEqual(c.kwargs['pageSize'],1000)
+            self.assertIn("'photos_root' in parents",c.kwargs['q'])
+            self.assertIn('createdTime >=',c.kwargs['q'])
+            self.assertIn("mimeType contains 'image/'",c.kwargs['q'])
+            self.assertNotIn('thumbnail',c.kwargs['fields'])
+
+    def test_incomplete_or_repeating_count_does_not_report_a_false_total(self):
+        for responses in [[{'incompleteSearch':True,'files':[]}],
+                          [{'nextPageToken':'repeat','files':[]}, {'nextPageToken':'repeat','files':[]}]]:
+            self.service.files().list().execute.side_effect=responses
+            with self.assertRaises(PhotoError):self.photos.count('main')
+
+    def test_missing_team_count_is_zero_without_main_folder_fallback(self):
+        self.service.files().list().execute.return_value={'files':[]}
+        self.assertEqual(self.photos.count('1a'),0)
+        self.assertEqual(self.service.files().list.call_args.kwargs['fields'],'files(id)')
+        self.assertIn("name='A팀'",self.service.files().list.call_args.kwargs['q'])
+
+    def test_count_does_not_block_the_first_photo_page(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        listing_service,count_service=Mock(),Mock()
+        started,release=threading.Event(),threading.Event()
+        listing_service.files().list().execute.return_value={'files':[]}
+        def count_response():
+            started.set()
+            release.wait(2)
+            return {'files':[]}
+        count_service.files().list().execute.side_effect=count_response
+        photos=Photos(lambda: count_service if threading.current_thread().name.startswith('count') else listing_service,'photos_root')
+        with ThreadPoolExecutor(thread_name_prefix='count') as pool:
+            counting=pool.submit(photos.count,'main')
+            try:
+                self.assertTrue(started.wait(1))
+                with ThreadPoolExecutor(thread_name_prefix='listing') as other:
+                    self.assertEqual(other.submit(photos.listing,'main').result(timeout=1)['photos'],[])
+            finally:
+                release.set()
+            self.assertEqual(counting.result(timeout=1),0)
+
     def test_routes_require_access_and_validate_scope_and_filters(self):
         with tempfile.TemporaryDirectory() as folder:
             mock=Mock()
             mock.listing.return_value={'photos':[],'next_page_token':'','folder_url':None}
+            mock.count.return_value=84
             mock.thumbnail.return_value=b'test-jpeg'
             app=create_app({'DB_PATH':Path(folder)/'db.sqlite','STORAGE':folder,'PHOTOS':mock,'SECRET_KEY':'test','PHOTO_FOLDER_ID':'photos_root'})
             client=app.test_client()
-            for route in ['/library/api/photos','/library/photos/pic/thumbnail']:
+            for route in ['/library/api/photos','/library/api/photos/count','/library/photos/pic/thumbnail']:
                 self.assertEqual(client.get(route).status_code,401)
             app.config['PUBLIC_ACCESS']=True
             for query in ['project=unknown','sort=bad','days=1','page_token='+'x'*4097]:
                 self.assertEqual(client.get('/library/api/photos?'+query).status_code,400)
             self.assertEqual(client.get('/library/api/photos?project=additional&team=1a').status_code,200)
             mock.listing.assert_called_once_with('1a','date_desc',0,'')
+            for query in ['project=unknown','days=1','days=bad']:
+                self.assertEqual(client.get('/library/api/photos/count?'+query).status_code,400)
+            self.assertEqual(client.get('/library/api/photos/count?project=additional&team=1b&days=7').json,{'total_count':84})
+            mock.count.assert_called_once_with('1b',7)
+            mock.count.side_effect=PhotoError('test count error')
+            self.assertEqual(client.get('/library/api/photos/count').status_code,503)
             self.assertEqual(client.get('/library/photos/pic/thumbnail').mimetype,'image/jpeg')
             mock.listing.side_effect=PhotoError('test error')
             self.assertIsNone(client.get('/library/api/photos?project=additional&team=1b').json['folder_url'])

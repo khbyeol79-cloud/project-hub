@@ -15,6 +15,7 @@ import requests
 READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 ID = re.compile(r'^[A-Za-z0-9_-]{1,200}$')
 TEAM_NAMES = {'1a': 'A팀', '1b': 'B팀'}
+PAGE_SIZE = 12
 
 
 class PhotoError(RuntimeError):
@@ -43,6 +44,10 @@ class Photos:
         self.folder_id, self.root_id = folder_id, root_id
         self.lock = threading.Lock()
         self.service = None
+        # Counting must not hold the thumbnail/list service lock. Drive client
+        # transports are not shared between these concurrent request streams.
+        self.count_lock = threading.Lock()
+        self.count_service = None
 
     def _service(self):
         if self.service is None:
@@ -81,20 +86,50 @@ class Photos:
             base = self._find(service, TEAM_NAMES[scope], base)
         return base
 
-    def listing(self, scope, sort='date_desc', days=0, page_token=''):
+    @staticmethod
+    def _query(folder, days):
         from datetime import datetime, timedelta, timezone
+        query = "trashed=false and '" + folder + "' in parents and mimeType contains 'image/'"
+        if days:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            query += " and createdTime >= '" + cutoff + "'"
+        return query
+
+    def count(self, scope, days=0):
+        with self.count_lock:
+            if self.count_service is None:
+                self.count_service = self.service_factory()
+            service = self.count_service
+            folder = self._root(service, scope)
+            if not folder:
+                return 0
+            query = self._query(folder, days)
+            ids, pages, token = set(), set(), ''
+            while True:
+                result = service.files().list(q=query, fields='nextPageToken,incompleteSearch,files(id,parents)',
+                    pageSize=1000, pageToken=token or None,
+                    supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+                if result.get('incompleteSearch'):
+                    raise PhotoError('전체 사진 수를 확인하지 못했습니다. 다시 새로고침해 주세요.')
+                ids.update(item['id'] for item in result.get('files', [])
+                           if folder in item.get('parents', []) and ID.fullmatch(item.get('id', '')))
+                token = result.get('nextPageToken', '')
+                if not token:
+                    return len(ids)
+                if token in pages:
+                    raise PhotoError('전체 사진 수를 확인하지 못했습니다. 다시 새로고침해 주세요.')
+                pages.add(token)
+
+    def listing(self, scope, sort='date_desc', days=0, page_token=''):
         with self.lock:
             service = self._service()
             folder = self._root(service, scope)
             if not folder:
                 return dict(photos=[], next_page_token='', folder_url=None,
                             notice='이 팀의 사진 폴더가 아직 없습니다. 사진/' + TEAM_NAMES[scope] + ' 폴더를 만들면 연결됩니다.')
-            query = "trashed=false and '" + folder + "' in parents and mimeType contains 'image/'"
-            if days:
-                cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-                query += " and createdTime >= '" + cutoff + "'"
+            query = self._query(folder, days)
             result = service.files().list(q=query, fields='nextPageToken,files(id,name,mimeType,createdTime,parents)',
-                orderBy='createdTime desc,name' if sort == 'date_desc' else 'createdTime,name', pageSize=30,
+                orderBy='createdTime desc,name' if sort == 'date_desc' else 'createdTime,name', pageSize=PAGE_SIZE,
                 pageToken=page_token or None, supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
             items = []
             for item in result.get('files', []):

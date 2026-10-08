@@ -1,5 +1,5 @@
 'use strict';
-let photoRequest=0, photoItems=[], photoPage='', photoIndex=0, photoReturnFocus=null;
+let photoRequest=0, photoItems=[], photoPage='', photoIndex=0, photoReturnFocus=null, photoTotal=null, photoNotice='', photoCountFailed=false;
 function closePhotos(){
  document.body.classList.remove('photos-view');
  photoRequest++;$('photos-panel').hidden=true;$('photos-open').setAttribute('aria-pressed','false');
@@ -21,7 +21,7 @@ function photoFolder(url){
 }
 async function loadPhotos(append=false){
  const seq=++photoRequest, version=scopeVersion;
- if(!append){photoItems=[];photoPage='';$('photos-grid').replaceChildren();photoFolder(null);}
+ if(!append){photoItems=[];photoPage='';photoTotal=null;photoNotice='';photoCountFailed=false;$('photos-grid').replaceChildren();photoFolder(null);}
  $('photos-status').textContent='사진을 불러오고 있어요…';$('photos-more').hidden=true;
  try{
   const params=new URLSearchParams({sort:$('photos-sort').value,days:$('photos-days').value,page_token:photoPage});
@@ -30,7 +30,9 @@ async function loadPhotos(append=false){
   const d=await response.json();
   if(seq!==photoRequest||version!==scopeVersion||$('photos-panel').hidden)return;
   photoFolder(d.folder_url);if(!response.ok)throw Error(d.error||'사진을 불러오지 못했습니다.');
+  const seen=new Set(photoItems.map(p=>p.id));
   d.photos.forEach(p=>{
+   if(seen.has(p.id))return;seen.add(p.id);
    const index=photoItems.length;photoItems.push(p);
    const card=node('button',undefined,'photo-card');card.type='button';card.setAttribute('aria-label',p.name+' 크게 보기');
    const frame=node('span',undefined,'photo-thumb'),img=node('img');img.src=scopedUrl('/library/photos/'+encodeURIComponent(p.id)+'/thumbnail');img.alt='';img.loading='lazy';img.decoding='async';
@@ -39,8 +41,23 @@ async function loadPhotos(append=false){
    card.onclick=()=>openPhoto(index,card);$('photos-grid').append(card);
   });
   photoPage=d.next_page_token||'';$('photos-more').hidden=!photoPage;
-  $('photos-status').textContent=d.notice||(photoItems.length?photoItems.length+'장'+(photoPage?' · 더 불러올 수 있어요':''):'등록된 사진이 없어요.');
+  photoNotice=d.notice||'';renderPhotoCount();loadPhotoCount(seq,version);
  }catch(e){if(seq===photoRequest&&version===scopeVersion&&!$('photos-panel').hidden){$('photos-status').textContent=e.message;$('photos-more').hidden=!photoPage;}}
+}
+function renderPhotoCount(){
+ const total=photoTotal===null?(photoCountFailed?'?':'…'):photoTotal;
+ $('photos-status').textContent=photoNotice||photoItems.length+' / '+total+'장'+(photoCountFailed?' · 전체 수 확인 실패':photoTotal===0?' · 등록된 사진이 없어요.':'');
+ $('photos-status').title='표시 수 / 선택한 기간의 전체 수';
+}
+async function loadPhotoCount(seq,version){
+ try{
+  const response=await fetch(scopedUrl('/library/api/photos/count?days='+$('photos-days').value));
+  if(response.redirected||!response.headers.get('content-type')?.includes('application/json'))throw Error('count');
+  const d=await response.json();
+  if(seq!==photoRequest||version!==scopeVersion||$('photos-panel').hidden)return;
+  if(!response.ok||!Number.isSafeInteger(d.total_count)||d.total_count<0)throw Error('count');
+  photoTotal=d.total_count;photoCountFailed=false;renderPhotoCount();
+ }catch(e){if(seq===photoRequest&&version===scopeVersion&&!$('photos-panel').hidden){photoCountFailed=true;photoTotal=null;renderPhotoCount();}}
 }
 function openPhoto(index,button){
  photoIndex=index;if(button)photoReturnFocus=button;
