@@ -17,9 +17,9 @@ function itemUrl(key,id){const url=new URL(location.pathname,location.origin);Ob
 function chooseScope(){
  scopeVersion++;generation++;searching++;selected=null;renderScope();
  $('query').value='';$('channel').replaceChildren(new Option('모든 채널',''));$('extension').replaceChildren(new Option('모든 확장자',''));$('files').replaceChildren();$('count').textContent='';
- $('pages').replaceChildren();$('file-versions').replaceChildren();$('document').hidden=$('ai-panel').hidden=$('weekly-panel').hidden=true;$('welcome').hidden=false;
+ const wasPhotos=!$('photos-panel').hidden;closePhotos();$('pages').replaceChildren();$('file-versions').replaceChildren();$('document').hidden=$('ai-panel').hidden=$('weekly-panel').hidden=true;$('welcome').hidden=false;
  $('answer').hidden=true;$('answer-body').textContent='';$('sources').replaceChildren();$('ai-status').textContent='';weeklyResult(null);$('weekly-files').replaceChildren();$('weekly-messages').replaceChildren();
- history.replaceState(null,'',scopedUrl(location.pathname));scopeLabel();loadFiles();loadProcessing();
+ history.replaceState(null,'',scopedUrl(location.pathname));scopeLabel();loadFiles();loadProcessing();if(wasPhotos)openPhotos();
 }
 document.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>{
  const scope=b.dataset.scope;if(scope===(activeProject==='main'?'main':activeTeam))return;
@@ -32,7 +32,7 @@ async function loadFiles(append=false){if($('search-kind').value==='all')return 
  d.files.forEach(f=>{const b=node('button',undefined,'file');b.dataset.id=f.id;b.classList.toggle('selected',selected?.id===f.id);b.setAttribute('aria-label',f.original_filename+' 열기');b.append(node('span',f.original_filename.split('.').pop().slice(0,5).toUpperCase(),'file-icon'));const info=node('span',undefined,'file-info');info.append(node('span',f.original_filename,'filename'));info.append(node('span',f.discord_channel+' · '+size(f.file_size_bytes),'file-meta'));const meta=node('span',(statusNames[f.content_status]||'원본으로 보기')+' · '+String(f.uploaded_at).slice(0,10),'file-meta');if(f.identical_count)meta.append(node('span','동일 내용 '+(f.identical_count+1)+'건','badge'));if(f.content_versions>1)meta.append(node('span','내용 '+f.content_versions+'종','badge'));if(f.upload_count>1)meta.append(node('span',f.latest_id===f.id?'최신 업로드':'이전 업로드','badge'));info.append(meta);if(f.excerpt)info.append(node('span',f.excerpt,'search-excerpt'));b.append(info);b.onclick=()=>openFile(f.id);$('files').append(b);});
  $('count').textContent=$('files').children.length+' / '+d.total+'개';$('list-message').textContent=$('files').children.length?'':'검색된 자료가 없어요. 다른 단어로 찾아보세요.';offset+=d.files.length;$('more').hidden=!d.more;
  }catch(e){if(seq===searching)$('list-message').textContent=e.message;}}
-function tab(ai){scopeLabel();$('weekly-panel').hidden=true;$('document').hidden=ai||!selected;$('welcome').hidden=ai||Boolean(selected);$('ai-panel').hidden=!ai;document.querySelector('.reader').classList.add('open');if(ai){setSidebar(false);usage();document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});}}
+function tab(ai){closePhotos();scopeLabel();$('weekly-panel').hidden=true;$('document').hidden=ai||!selected;$('welcome').hidden=ai||Boolean(selected);$('ai-panel').hidden=!ai;document.querySelector('.reader').classList.add('open');if(ai){setSidebar(false);usage();document.querySelector('.reader').scrollIntoView({behavior:'smooth',block:'start'});}}
 
 async function openFile(id,sourcePage=null){$('file-versions').replaceChildren();$('file-processing').hidden=true;setSidebar(false);const seq=++generation;selected=null;$('welcome').hidden=true;$('document').hidden=false;document.querySelector('.reader').classList.add('open');document.querySelector('.workspace').classList.add('reading');$('doc-title').textContent='자료를 여는 중…';$('pages').replaceChildren();$('doc-channel').textContent='';$('doc-meta').textContent='';$('download').hidden=true;$('drive-view').hidden=true;$('drive-view').removeAttribute('href');$('partial').hidden=true;tab(false);$('document').hidden=false;$('welcome').hidden=true;document.querySelectorAll('.file').forEach(e=>e.classList.toggle('selected',e.dataset.id===String(id)));
  try{const f=await api('files/'+id+(sourcePage?'?source_page='+encodeURIComponent(sourcePage):''));if(seq!==generation)return;setSidebar(false);selected=f;history.replaceState(null,'',itemUrl('file',f.id));$('file-processing').textContent='수집 완료 · '+(statusNames[f.content_status]||'본문 상태 확인 필요')+' · '+uploadLabel(f.upload_status);$('file-processing').hidden=false;$('doc-title').textContent=f.original_filename;$('doc-channel').textContent=f.discord_channel;$('doc-meta').textContent=size(f.file_size_bytes)+' · '+String(f.uploaded_at).slice(0,10)+' · 자료 #'+f.id;$('download').href=scopedUrl('/library/files/'+id+'/download');$('download').hidden=false;if(f.drive_url){$('drive-view').href=f.drive_url;$('drive-view').hidden=false;}$('partial').hidden=!f.partial;
@@ -47,7 +47,7 @@ async function runAI(task){if(busy)return;const version=scopeVersion;busy=true;u
  $('answer').hidden=false;$('answer-label').textContent=(task==='ask'?'선택 범위 답변':'최근 자료 정리')+(r.cached?' · 저장된 결과':'');$('answer-body').textContent=r.answer;$('answer-partial').hidden=!r.partial;$('sources').replaceChildren();r.sources.forEach(s=>{if(s.kind==='message'){const a=node('a','['+s.id+'] '+s.label);if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(s.url||'')){a.href=s.url;a.target='_blank';a.rel='noopener noreferrer';}$('sources').append(a);return;}const b=node('button','['+s.id+'] '+s.label);b.onclick=async()=>{await openFile(s.file_id,s.page);tab(false);if($('extracted-text'))$('extracted-text').open=true;document.getElementById('page-'+s.page)?.scrollIntoView({behavior:'smooth'});};$('sources').append(b);});$('ai-status').textContent='';
  }catch(e){if(version===scopeVersion)$('ai-status').textContent=e.message;}finally{busy=false;updateButtons();usage();}}
 $('search').onsubmit=e=>{e.preventDefault();loadFiles();};$('channel').onchange=()=>{scopeLabel();loadFiles();};$('extension').onchange=()=>loadFiles();$('more').onclick=()=>loadFiles(true);$('tab-text').onclick=()=>tab(false);$('global-ai').onclick=()=>tab(true);$('sidebar-ai').onclick=()=>tab(true);$('summarize').onclick=()=>runAI('summary');$('ask').onsubmit=e=>{e.preventDefault();runAI('ask');};
-async function start(){const initial=new URLSearchParams(location.search);if(initial.get('project')==='additional'&&['1a','1b'].includes(initial.get('team'))){activeProject='additional';activeTeam=initial.get('team');}renderScope();const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname+location.search);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();loadProcessing();await openLinked();}start();
+async function start(){const initial=new URLSearchParams(location.search);if(initial.get('project')==='additional'&&['1a','1b'].includes(initial.get('team'))){activeProject='additional';activeTeam=initial.get('team');}renderScope();const token=new URLSearchParams(location.hash.slice(1)).get('key');if(token){history.replaceState(null,'',location.pathname+location.search);try{await api('access',{method:'POST',headers:{'Content-Type':'application/json','X-Requested-With':'ProjectHub'},body:JSON.stringify({token})});}catch(e){$('list-message').textContent=e.message;return;}}loadFiles();loadProcessing();await openLinked();}document.addEventListener('DOMContentLoaded',start);
 $('share').onclick=()=>copyItemLink($('share'));$('item-share').onclick=()=>copyItemLink($('item-share'));
 
 const mobile=matchMedia('(max-width:800px)');
@@ -105,7 +105,7 @@ function weeklyResult(r){
 }
 async function openWeekly(){
  const version=scopeVersion;
- ++generation;setSidebar(false);$('welcome').hidden=true;$('document').hidden=true;$('ai-panel').hidden=true;$('weekly-panel').hidden=false;
+ ++generation;closePhotos();setSidebar(false);$('welcome').hidden=true;$('document').hidden=true;$('ai-panel').hidden=true;$('weekly-panel').hidden=false;
  $('weekly-status').textContent='저장된 정리와 최근 자료를 불러오고 있어요…';
  try{const r=await api('weekly');if(version!==scopeVersion)return;weeklyResult(r.saved);$('weekly-status').textContent=r.saved?'':'저장된 정리가 없습니다. 버튼을 눌러 만들어 보세요.';
  $('weekly-files').replaceChildren();r.files.forEach(f=>{const b=node('button',f.original_filename,'file');b.onclick=()=>openFile(f.id);$('weekly-files').append(b);});
@@ -180,13 +180,13 @@ updateFilters();
 
 function uploadLabel(status){return {uploaded:'Drive 저장 완료',pending:'Drive 업로드 대기',failed:'Drive 업로드 실패 · 재시도 대기',needs_review:'Drive 업로드 확인 필요'}[status]||'Drive 상태 확인 전';}
 async function copyItemLink(button){
- try{const r=await api('share-link');const url=new URL(r.url);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));if(!$('document').hidden&&selected){if(selected.kind==='message')url.searchParams.set('message',selected.message_id);else if(selected.id)url.searchParams.set('file',selected.id);}
+ try{const r=await api('share-link');const url=new URL(r.url);Object.entries(scopeParams()).forEach(([k,v])=>url.searchParams.set(k,v));if(!$('photos-panel').hidden)url.searchParams.set('view','photos');if(!$('document').hidden&&selected){if(selected.kind==='message')url.searchParams.set('message',selected.message_id);else if(selected.id)url.searchParams.set('file',selected.id);}
  await navigator.clipboard.writeText(url.toString());const old=button.textContent;button.textContent='주소 복사됨 ✓';setTimeout(()=>button.textContent=old,2500);
  }catch(e){$('list-message').textContent='주소 복사 실패: '+e.message;}
 }
 async function openLinked(){
  const params=new URLSearchParams(location.search),file=params.get('file'),message=params.get('message');
- if(file===null&&message===null)return;
+ if(file===null&&message===null){if(params.get('view')==='photos')openPhotos();return;}
  if((file&&message)||!/^\d{1,20}$/.test(file||message||'')){$('list-message').textContent='자료 주소가 올바르지 않습니다.';return;}
  try{if(file)await openFile(file);else openMessage(await api('messages/'+message));}
  catch(e){$('list-message').textContent='대화를 열 수 없습니다. 삭제되었거나 공개 범위 밖일 수 있습니다.';}

@@ -11,6 +11,7 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+import io
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request, send_file, session
@@ -23,6 +24,7 @@ from .retrieval import retrieve
 from .conversations import Conversations
 from . import versions
 from bot import projects
+from .photos import Photos, PhotoError, photo_service
 
 TEXT_PREVIEW_SUFFIXES = {'.md', '.markdown', '.txt', '.py', '.c', '.cpp', '.h', '.hpp', '.java',
                          '.js', '.ts', '.json', '.csv', '.yaml', '.yml', '.ini', '.cfg', '.css'}
@@ -39,6 +41,8 @@ def create_app(config=None, ai=None):
     app.config.update(DB_PATH=ROOT.parent / 'project_hub.db', STORAGE=ROOT.parent / 'storage',
                       SHARE_HASH='', PUBLIC_ORIGIN='', PUBLIC_ACCESS=False, MAX_CONTENT_LENGTH=8192,
                       DOCUMENT_CACHE=None, MESSAGE_CHANNELS=(),
+                      PHOTO_FOLDER_ID='', PHOTO_ROOT_ID='',
+                      PHOTO_TOKEN=Path.home()/'.config/project-hub/photos-token.json',
                       SHARE_URL_FILE=Path.home()/'.config/project-hub/library-share-url.txt',
                       SESSION_COOKIE_NAME='ph_library', SESSION_COOKIE_PATH='/library/',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SECURE=True,
@@ -48,6 +52,9 @@ def create_app(config=None, ai=None):
     documents=Documents(app.config['DB_PATH'],app.config['STORAGE'],
                         app.config['DOCUMENT_CACHE'] or Path(app.config['DB_PATH']).parent/'library-text.db')
     app.extensions['documents']=documents
+    app.extensions['photos']=app.config.get('PHOTOS') or Photos(
+        lambda: photo_service(app.config['PHOTO_TOKEN']),
+        app.config['PHOTO_FOLDER_ID'], app.config['PHOTO_ROOT_ID'])
     ai_lock = threading.Lock()
     access_lock = threading.Lock()
     access_attempts = deque()
@@ -93,7 +100,7 @@ def create_app(config=None, ai=None):
             if (not app.config['PUBLIC_ORIGIN'] or request.headers.get('Origin') != app.config['PUBLIC_ORIGIN']
                     or request.headers.get('X-Requested-With') != 'ProjectHub' or not request.is_json):
                 abort(403)
-        if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/assets/reading.js', '/library/api/access'}:
+        if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/assets/reading.js', '/library/assets/photos.js', '/library/api/access'}:
             return
         if app.config['PUBLIC_ACCESS']:
             return
@@ -139,9 +146,43 @@ def create_app(config=None, ai=None):
 
     @app.get('/library/assets/<name>')
     def asset(name):
-        if name not in {'app.js', 'style.css', 'reading.js'}:
+        if name not in {'app.js', 'style.css', 'reading.js', 'photos.js'}:
             abort(404)
         return send_file(ROOT / 'static' / name)
+
+    @app.get('/library/api/photos')
+    def photo_list():
+        scope = request_scope()
+        sort = request.args.get('sort', 'date_desc')
+        token = request.args.get('page_token', '')
+        try:
+            days = int(request.args.get('days', '0'))
+        except ValueError:
+            abort(400)
+        if sort not in {'date_desc', 'date_asc'} or days not in {0, 7, 30} or len(token) > 4096:
+            abort(400)
+        try:
+            return jsonify(app.extensions['photos'].listing(scope, sort, days, token))
+        except PhotoError as exc:
+            message = str(exc)
+        except Exception as exc:
+            app.logger.warning('PHOTO_LIST_FAILED type=%s', type(exc).__name__)
+            message = 'Google Drive 사진 연결을 확인해 주세요. 잠시 후 다시 시도하거나 원본 폴더를 열어 주세요.'
+        # A team must never receive a link to the original project's folder on error.
+        url = Photos.folder_url(app.config['PHOTO_FOLDER_ID']) if scope == 'main' else None
+        return jsonify(error=message, folder_url=url), 503
+
+    @app.get('/library/photos/<file_id>/thumbnail')
+    def photo_thumbnail(file_id):
+        scope = request_scope()
+        try:
+            data = app.extensions['photos'].thumbnail(scope, file_id)
+        except FileNotFoundError:
+            abort(404)
+        except Exception as exc:
+            app.logger.warning('PHOTO_THUMBNAIL_FAILED type=%s', type(exc).__name__)
+            return jsonify(error='사진 미리보기를 불러오지 못했습니다.'), 503
+        return send_file(io.BytesIO(data), mimetype='image/jpeg')
 
     @app.post('/library/api/access')
     def access():
@@ -551,6 +592,9 @@ def main():
     app = create_app({'SHARE_HASH':share_hash,'SECRET_KEY':secret,'PUBLIC_ORIGIN': origin,
                       'PUBLIC_ACCESS':os.environ.get('PROJECT_HUB_LIBRARY_PUBLIC')=='true',
                       'MESSAGE_CHANNELS':os.environ.get('PROJECT_HUB_LIBRARY_MESSAGE_CHANNELS','').split(','),
+                      'PHOTO_FOLDER_ID':os.environ.get('PROJECT_HUB_PHOTO_FOLDER_ID',''),
+                      'PHOTO_ROOT_ID':os.environ.get('PROJECT_HUB_PHOTO_ROOT_ID',''),
+                      'PHOTO_TOKEN':os.environ.get('PROJECT_HUB_PHOTO_TOKEN',str(Path.home()/'.config/project-hub/photos-token.json')),
                       'DOCUMENT_CACHE':settings.state/'library-text.db'}, Organizer(settings))
     app.extensions['documents'].start()
     serve(app, host='127.0.0.1', port=8090, threads=4, max_request_body_size=8192,

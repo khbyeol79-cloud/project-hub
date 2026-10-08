@@ -87,3 +87,8 @@ Windows에서는 `.\.venv\Scripts\python.exe -m bot.status`를 사용합니다. 
 ## GitHub 저장
 
 코드 저장 전 `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`와 `git diff --check`를 실행하고, 변경 파일에 비밀정보와 실행 데이터가 없는지 확인하세요. 필요한 파일만 명시적으로 추가합니다. `.env.example`에는 빈 설정 항목만 둡니다. 가상환경과 실제 수집 자료는 GitHub 코드 백업에 포함되지 않습니다.
+
+## Drive 사진 갤러리
+
+자료실 상단 **사진** 메뉴에서 `Project Hub/사진`을 확인합니다.
+별도 읽기 전용 인증과 웹 의존성 설치/배포 절차는 [organizer/PHOTOS.md](organizer/PHOTOS.md)를 따르세요.
