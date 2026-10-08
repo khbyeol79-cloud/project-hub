@@ -46,12 +46,12 @@ if existing and existing != folder:
 load_dotenv(config, override=False)
 token = Path(os.environ.get('PROJECT_HUB_PHOTO_TOKEN', str(config.parent / 'photos-token.json'))).expanduser()
 if not token.is_file():
-    print('사진용 Google 인증이 한 번 필요합니다. --upload로 만든 photos-token.json을 ~/.config/project-hub/에 업로드한 뒤 같은 명령을 다시 실행하세요.')
+    print('사진용 Google 인증이 한 번 필요합니다. 개발 체크아웃에서 .venv/bin/python -m organizer.photos --pi --upload로 인증한 뒤 같은 적용 명령을 다시 실행하세요.')
     raise SystemExit(2)
 try:
     creds = Credentials.from_authorized_user_file(token)
     if not creds.has_scopes(['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file']):
-        print('사진 토큰에 추가 Google 동의가 필요합니다. organizer.photos --upload로 다시 인증하세요.')
+        print('사진 토큰에 추가 Google 동의가 필요합니다. .venv/bin/python -m organizer.photos --pi --upload로 다시 인증하세요.')
         raise SystemExit(2)
     if not creds.valid:
         if not creds.refresh_token:

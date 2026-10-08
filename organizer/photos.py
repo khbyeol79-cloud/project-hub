@@ -3,7 +3,7 @@ import io
 import re
 import threading
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -143,26 +143,120 @@ class Photos:
             return output.getvalue()
 
 
+def callback_code(response, redirect_uri, state):
+    """Validate a copied loopback response before exchanging its private code."""
+    import secrets
+    if len(response) > 16384:
+        raise PhotoError('인증 후 주소 전체를 다시 확인해 주세요.')
+    actual, expected = urlparse(response.strip()), urlparse(redirect_uri)
+    if (actual.scheme, actual.netloc, actual.path) != (expected.scheme, expected.netloc, expected.path) or actual.fragment:
+        raise PhotoError('이번 인증에서 나온 127.0.0.1 주소 전체를 붙여넣어 주세요.')
+    query = parse_qs(actual.query)
+    states, codes = query.get('state', []), query.get('code', [])
+    if len(states) != 1 or not secrets.compare_digest(states[0].encode(), state.encode()):
+        raise PhotoError('다른 인증의 주소입니다. 이번 터미널에서 시작한 인증 주소를 사용해 주세요.')
+    if 'error' in query or len(codes) != 1 or not codes[0]:
+        raise PhotoError('Google 권한 동의가 완료되지 않았습니다.')
+    return codes[0]
+
+
+def pi_authorize(flow):
+    """Keep the PKCE verifier on Pi; copy only the desktop loopback response."""
+    import getpass
+    import socket
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(1)
+        flow.redirect_uri = 'http://127.0.0.1:' + str(listener.getsockname()[1]) + '/'
+        url, state = flow.authorization_url(prompt='consent', access_type='offline')
+        if urlparse(url).scheme != 'https' or urlparse(url).hostname != 'accounts.google.com':
+            raise PhotoError('Google 데스크톱 앱 인증 설정을 확인해 주세요.')
+        print('아래 주소를 개인 PC 브라우저에서 열고 Drive 읽기/사진 업로드 권한에 동의하세요.\n' + url, flush=True)
+        print('동의 뒤 127.0.0.1 연결 오류가 나면 주소창의 전체 주소를 복사하세요.\n채팅에 보내지 말고 아래 Pi 터미널 입력에만 붙여넣으세요.', flush=True)
+        response = getpass.getpass('인증 후 주소 전체(입력 내용은 숨김): ')
+        code = callback_code(response, flow.redirect_uri, state)
+        # State is checked above. The code and PKCE verifier are exchanged over
+        # Google's HTTPS token endpoint; no insecure transport override is used.
+        flow.fetch_token(code=code, timeout=30)
+    return flow.credentials
+
+
+def pi_client(root):
+    """Use the original desktop client locally without rewriting bot auth."""
+    import json
+    path = root / 'credentials.json'
+    if path.is_file():
+        config = json.loads(path.read_text(encoding='utf-8'))
+        if 'installed' not in config:
+            raise PhotoError('기존 Google 데스크톱 앱 credentials.json이 필요합니다.')
+        return config
+    path = root / 'token.json'
+    if not path.is_file():
+        raise PhotoError('Pi 운영 폴더에 기존 Google 인증 설정을 찾을 수 없습니다.')
+    token = json.loads(path.read_text(encoding='utf-8'))
+    if not token.get('client_id') or not token.get('client_secret'):
+        raise PhotoError('기존 Google 데스크톱 앱 credentials.json이 필요합니다.')
+    return {'installed': {'client_id': token['client_id'], 'client_secret': token['client_secret'],
+            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri': 'https://oauth2.googleapis.com/token', 'redirect_uris': ['http://localhost']}}
+
+
+def save_photo_token(path, creds):
+    import os
+    import tempfile
+    if path.is_symlink() or path.name in {'token.json', 'credentials.json'}:
+        raise PhotoError('사진용 photos-token.json을 사용하세요. 기존 봇 토큰은 교체하지 않습니다.')
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent,
+                                         prefix='.photos-token-', delete=False) as stream:
+            temp = Path(stream.name)
+            stream.write(creds.to_json())
+        if os.name == 'posix':
+            temp.chmod(0o600)
+        temp.replace(path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+
 def main():
     import argparse
-    import os
     parser = argparse.ArgumentParser(description='Authorize a separate Drive photo token locally; never replace bot token.json.')
-    parser.add_argument('--credentials', type=Path, required=True)
+    parser.add_argument('--credentials', type=Path)
+    parser.add_argument('--pi', action='store_true', help='Use the existing Pi desktop OAuth client and paste the browser callback into the authenticated terminal')
     parser.add_argument('--token', type=Path, default=Path.home()/'.config/project-hub/photos-token.json')
     parser.add_argument('--upload', action='store_true', help='Also allow new Discord photo uploads using drive.file, without full Drive write access')
     args = parser.parse_args()
+    if not args.pi and args.credentials is None:
+        parser.error('--credentials 또는 --pi가 필요합니다.')
+    if (args.token.name in {'token.json', 'credentials.json'} or args.token.is_symlink()
+            or (args.credentials and args.token.resolve() == args.credentials.resolve())):
+        parser.error('기존 봇 토큰 대신 사진용 photos-token.json을 사용하세요.')
     # Google consent covers Drive read access; the app only serves configured photo folders.
     scopes = [READ_SCOPE]
     if args.upload:
         scopes.append('https://www.googleapis.com/auth/drive.file')
-    flow = InstalledAppFlow.from_client_secrets_file(args.credentials, scopes)
-    creds = flow.run_local_server(port=0)
-    args.token.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(args.token, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-        stream.write(creds.to_json())
-    if os.name == 'posix':
-        args.token.chmod(0o600)
+    try:
+        if args.pi:
+            flow = InstalledAppFlow.from_client_config(pi_client(Path.home() / 'project-hub'),
+                                                      scopes, autogenerate_code_verifier=True)
+            creds = pi_authorize(flow)
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(args.credentials, scopes,
+                                                           autogenerate_code_verifier=True)
+            creds = flow.run_local_server(port=0, prompt='consent')
+        if not creds.refresh_token or not creds.has_scopes(scopes):
+            raise PhotoError('Google 권한 동의와 오프라인 접근을 다시 확인해 주세요.')
+        save_photo_token(args.token, creds)
+    except PhotoError as exc:
+        parser.exit(2, str(exc) + '\n')
+    except KeyboardInterrupt:
+        parser.exit(130, '인증을 취소했습니다. 기존 토큰은 유지합니다.\n')
+    except Exception:
+        # OAuth failures can include private response data; keep it out of logs.
+        parser.exit(2, '사진 인증에 실패했습니다. Google 동의 화면과 기존 앱 설정을 확인해 주세요.\n')
     print('사진 연결 인증 완료. 토큰은 개인 서버에만 보관하세요.')
 
 

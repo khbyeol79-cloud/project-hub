@@ -30,7 +30,31 @@ Google 동의 화면의 `drive.readonly`는 계정의 Drive 파일 전체 읽기
 클라우드 개발환경에 올리지 마세요. Google OAuth 앱의 테스트 사용자 등록 또는
 추가 권한 동의가 필요한 경우 Google 화면에서 먼저 완료합니다.
 
-## 개인 PC에서 사진 인증
+## Pi에서 기존 Google 설정으로 사진 인증
+
+PC에 저장소/가상환경을 준비하거나 토큰 파일을 옮기지 않고 인증할 수 있습니다.
+Pi의 인증된 code-server 터미널에서 검토한 커밋을 선택한 뒤 실행합니다.
+
+```bash
+.venv/bin/python -m organizer.photos --pi --upload
+```
+
+1. 터미널에 나온 Google 주소를 개인 PC의 일반 브라우저에서 엽니다.
+2. 기존 사진 폴더에 접근 가능한 계정으로 Drive 읽기/새 파일 업로드 권한에 동의합니다.
+3. 동의 뒤 `127.0.0.1` 연결 오류가 나타나면 **주소창의 전체 주소**를 복사하여
+   기다리는 **Pi 터미널의 숨김 입력**에 붙여넣고 Enter를 누릅니다. 이 주소에는
+   일회용 인증 코드가 있으므로 채팅/Discord/GitHub로 보내지 않습니다.
+4. 인증 완료 메시지 뒤 사진 적용 명령을 다시 실행합니다.
+
+기존 Pi의 `credentials.json` 또는 `token.json`에서 OAuth 데스크톱 앱 설정만
+읽습니다. 봇 토큰은 수정하지 않으며 사진 토큰은 기본적으로
+`~/.config/project-hub/photos-token.json`에 권한 600으로 저장합니다.
+Google 데스크톱 앱의 loopback 리디렉션을 사용하며, 인증 요청과 응답의 state를
+검증하고 PKCE 검증값을 Pi에 유지합니다. 공개 콜백 경로나 외부 포트는 추가하지
+않으며, Google의 폐기된 OOB 인증 방식은 사용하지 않습니다.
+[Google 데스크톱 OAuth 설명](https://developers.google.com/identity/protocols/oauth2/native-app)
+
+## 개인 PC에서 사진 인증 (대안)
 
 인증 브라우저가 실행되는 개인 PC의 Python 3.11 환경에서 수행합니다.
 기존 OAuth 데스크톱 앱 credentials.json을 사용합니다.
@@ -64,7 +88,7 @@ requirements를 설치하고 사진 폴더 설정을 반영합니다. 그 뒤 �
 
 Google 추가 동의는 자동으로 대신할 수 없습니다. 사진 토큰이 없거나 읽기 전용이면
 운영 설정/패키지/서비스를 바꾸기 전에 필요한 인증을 안내하고 종료합니다.
-개인 PC에서 위 인증을 한 번 완료하고 토큰을 업로드한 뒤 같은 명령을 재실행합니다.
+Pi 터미널의 `--pi --upload`로 위 인증을 한 번 완료한 뒤 같은 적용 명령을 재실행합니다.
 운영 .env에 다른 사진 폴더가 명시된 경우에도 자동으로 덮어쓰지 않습니다.
 동시에 다른 배포나 설정 편집을 실행하지 마세요.
 
