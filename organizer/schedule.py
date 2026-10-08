@@ -158,7 +158,7 @@ def schedule_snapshot(path, source, now=None):
     today = now.astimezone(ZoneInfo('Asia/Seoul')).date()
     monday = today - timedelta(days=today.weekday())
     data.update(source=source, available=True, timezone='Asia/Seoul', today=today.isoformat(),
-                week_start=monday.isoformat(), week_end=(monday+timedelta(days=20)).isoformat())
+                week_start=monday.isoformat(), week_end=(monday+timedelta(days=27)).isoformat())
     return data
 
 

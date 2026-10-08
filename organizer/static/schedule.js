@@ -16,7 +16,7 @@ function scheduleNoClass(key,day){
  if(key>educationSchedule.end)return '훈련 종료';
  return day?.note||([0,6].includes(scheduleDate(key).getUTCDay())?'주말':'수업 없음');
 }
-function scheduleLessons(key){
+function scheduleLessons(key,compact=false){
  const day=educationSchedule.days[key],wrap=node('div',undefined,'schedule-lessons');
  if(!day?.lessons.length){wrap.append(node('span',scheduleNoClass(key,day),'schedule-off'));return wrap;}
  // Keep lunch as separate time ranges, while showing each consecutive subject once.
@@ -29,8 +29,9 @@ function scheduleLessons(key){
  groups.forEach(group=>{
   const entry=node('div',undefined,'schedule-lesson');
   entry.append(node('strong',group.subject));
-  group.blocks.forEach(b=>entry.append(node('span',b.start+'–'+b.end+' · '+(b.start_period===b.end_period?b.start_period:b.start_period+'–'+b.end_period)+'교시','schedule-time')));
-  if(group.room)entry.append(node('span',group.room,'schedule-room'));
+  if(compact)entry.append(node('span',(group.start_period===group.end_period?group.start_period:group.start_period+'–'+group.end_period)+'교시','schedule-time'));
+  else group.blocks.forEach(b=>entry.append(node('span',b.start+'–'+b.end+' · '+(b.start_period===b.end_period?b.start_period:b.start_period+'–'+b.end_period)+'교시','schedule-time')));
+  if(!compact&&group.room)entry.append(node('span',group.room,'schedule-room'));
   wrap.append(entry);
  });
  return wrap;
@@ -39,16 +40,23 @@ function renderScheduleWeeks(){
  const d=educationSchedule;
  $('schedule-range').textContent=scheduleLabel(d.week_start)+' – '+scheduleLabel(d.week_end)+' · 매주 월요일 자동 갱신 · 한국 시간';
  $('schedule-weeks').replaceChildren();
- for(let week=0;week<3;week++){
+ const weekdays=node('div',undefined,'schedule-weekday-row');
+ scheduleWeekdays.forEach(label=>weekdays.append(node('span',label)));
+ $('schedule-weeks').append(weekdays);
+ for(let week=0;week<4;week++){
   const start=scheduleAdd(d.week_start,week*7),end=scheduleAdd(start,6),card=node('section',undefined,'schedule-week');
-  card.append(node('h3',(week===0?'이번 주':week===1?'다음 주':'다다음 주')+' · '+scheduleLabel(start)+'–'+scheduleLabel(end)));
-  for(let i=0;i<5;i++){
+  card.append(node('h3',(week===0?'이번 주':week===1?'다음 주':(week+1)+'주차')+' · '+scheduleLabel(start)+'–'+scheduleLabel(end)));
+  for(let i=0;i<7;i++){
    const key=scheduleAdd(start,i),day=d.days[key],row=node('div',undefined,'schedule-day'+(key===d.today?' is-today':''));
    const heading=node('div',undefined,'schedule-day-heading');
-   heading.append(node('strong',scheduleLabel(key)+' '+scheduleWeekdays[i]));
+   const button=node('button',scheduleLabel(key),'schedule-day-select');
+   button.type='button';button.dataset.scheduleDate=key;button.setAttribute('aria-pressed','false');
+   button.setAttribute('aria-label',key+' '+scheduleWeekdays[i]+' 시간표 보기');
+   button.onclick=()=>selectScheduleDate(key,true);
+   heading.append(button);
    if(key===d.today)heading.append(node('span','오늘','schedule-today-label'));
    else if(day?.note&&day.lessons.length)heading.append(node('span',day.note,'schedule-note'));
-   row.append(heading,scheduleLessons(key));card.append(row);
+   row.append(heading,scheduleLessons(key,true));card.append(row);
   }
   $('schedule-weeks').append(card);
  }
@@ -59,11 +67,11 @@ function selectScheduleDate(key,scroll=false){
  const d=scheduleDate(key),day=educationSchedule.days[key],title=key.replaceAll('-','.')+' ('+scheduleWeekdays[(d.getUTCDay()+6)%7]+')';
  $('schedule-detail-title').textContent=title+(day?.note?' · '+day.note:'');
  $('schedule-detail-body').replaceChildren(scheduleLessons(key));
- if(scroll)$('schedule-detail').scrollIntoView({behavior:'smooth',block:'nearest'});
+ if(scroll&&matchMedia('(max-width:1200px)').matches)$('schedule-detail').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 function renderScheduleCalendar(){
  const d=educationSchedule,start=scheduleDate(d.start),end=scheduleDate(d.end);
- $('schedule-months').replaceChildren();
+ $('schedule-months').replaceChildren($('schedule-detail'));
  for(let year=start.getUTCFullYear(),month=start.getUTCMonth();year<end.getUTCFullYear()||(year===end.getUTCFullYear()&&month<=end.getUTCMonth());month++){
   if(month===12){year++;month=0;}
   const card=node('section',undefined,'schedule-month'),first=new Date(Date.UTC(year,month,1)),last=new Date(Date.UTC(year,month+1,0));
@@ -89,7 +97,9 @@ function renderScheduleCalendar(){
 function clearSchedule(){
  educationSchedule=null;scheduleSelectedDate=null;
  for(const id of ['schedule-course','schedule-meta','schedule-range','schedule-source','schedule-detail-title'])$(id).textContent='';
- for(const id of ['schedule-weeks','schedule-months','schedule-detail-body'])$(id).replaceChildren();
+ for(const id of ['schedule-weeks','schedule-detail-body'])$(id).replaceChildren();
+ $('schedule-months').replaceChildren($('schedule-detail'));
+ $('schedule-layout').hidden=true;
  $('schedule-detail').hidden=true;
 }
 async function loadSchedule(force=false){
@@ -108,7 +118,7 @@ async function loadSchedule(force=false){
   $('schedule-course').textContent=d.course;
   $('schedule-meta').textContent=d.start.replaceAll('-','.')+' – '+d.end.replaceAll('-','.')+' · 총 '+d.teaching_days+'일 / '+d.teaching_periods+'교시';
   $('schedule-source').textContent='기준: '+d.source+' · 주말은 수업 없음 · 날짜를 누르면 시간표를 볼 수 있어요.';
-  $('schedule-detail').hidden=false;renderScheduleWeeks();renderScheduleCalendar();
+  $('schedule-layout').hidden=false;$('schedule-detail').hidden=false;renderScheduleWeeks();renderScheduleCalendar();
   $('schedule-status').textContent=d.today<d.start?'훈련 시작 전입니다. 아래에서 전체 일정을 확인하세요.':d.today>d.end?'훈련이 종료되었습니다. 아래에서 전체 일정을 확인하세요.':'';
  }catch(e){if(version===scopeVersion)$('schedule-status').textContent='일정 불러오기 실패: '+e.message+(educationSchedule?' 기존 일정을 표시하고 있어요.':'');}
  finally{

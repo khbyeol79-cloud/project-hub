@@ -79,54 +79,65 @@
 
 .photos-view .intro{display:none}
 
-/* Education home: the weekly window rolls automatically in Korea time. */
+/* Education home: the four-week window rolls automatically in Korea time. */
 .schedule-view .intro{display:none}
 #schedule-open[aria-pressed=true]{background:var(--green);color:white;border-color:var(--green)}
-#welcome{display:block;min-height:0;text-align:left;padding:28px}
+#welcome{display:block;min-height:0;text-align:left;padding:24px}
 .schedule-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
 #welcome .schedule-heading h2{margin:4px 0 10px;font-size:28px;font-weight:750;letter-spacing:-1px}
 #welcome #schedule-course{margin:0;font-size:15px;color:var(--ink);font-weight:650}
-#welcome #schedule-meta{margin:4px 0 24px;font-size:12px}
+#welcome #schedule-meta{margin:4px 0 22px;font-size:12px}
 #welcome h3{margin:0;font-size:18px;letter-spacing:-.4px}
-#welcome #schedule-range{font-size:12px;margin:5px 0 16px}
+#welcome #schedule-range{font-size:11px;margin:5px 0 14px;line-height:1.8}
 #welcome #schedule-status:empty{display:none}
 #welcome #schedule-status{color:var(--orange)}
-.schedule-weeks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
-.schedule-week{border:1px solid var(--line);border-radius:12px;overflow:hidden;min-width:0}
-#welcome .schedule-week h3{font-size:14px;background:#eef4e8;padding:12px 14px}
-.schedule-day{padding:12px 14px;border-top:1px solid var(--line)}
-.schedule-day.is-today{background:#f5faee;box-shadow:inset 3px 0 var(--green)}
-.schedule-day-heading{display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:7px;flex-wrap:wrap}
-.schedule-today-label,.schedule-note{font-size:10px;font-weight:650;color:var(--green);background:#e1edd6;padding:1px 6px;border-radius:4px}
-.schedule-lesson+.schedule-lesson{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
-.schedule-lesson strong{display:block;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
-.schedule-time,.schedule-room{display:block;font-size:11px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.schedule-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:22px;align-items:start}
+.schedule-current,.schedule-all{min-width:0}
+.schedule-week-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;overscroll-behavior-x:contain}
+.schedule-weeks{min-width:0}
+.schedule-weekday-row,.schedule-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.schedule-weekday-row{background:#eef4e8;text-align:center;font-size:12px;font-weight:650;color:var(--green)}
+.schedule-weekday-row span{padding:9px 0}
+.schedule-weekday-row span:nth-last-child(-n+2){color:var(--muted)}
+#welcome .schedule-week h3{grid-column:1/-1;font-size:11px;font-weight:600;color:var(--muted);background:#f6f8f3;padding:5px 10px;border-top:1px solid var(--line);letter-spacing:0}
+.schedule-day{min-width:0;padding:9px 8px 14px;border-top:1px solid var(--line);border-right:1px solid var(--line);min-height:145px}
+.schedule-day:last-child{border-right:0}
+.schedule-day:nth-last-child(-n+2){background:#fafbf8}
+.schedule-day.is-today{background:#f1f7e9;box-shadow:inset 0 3px var(--green)}
+.schedule-day:has([aria-pressed=true]){background:#edf4e7}
+.schedule-day-heading{display:flex;gap:4px;align-items:center;margin-bottom:9px;flex-wrap:wrap}
+.schedule-day-select{border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink);font-size:13px;font-weight:750;min-height:30px;padding:2px 5px;margin-left:-4px;font-variant-numeric:tabular-nums}
+.schedule-day-select:hover{border-color:var(--green)}
+.schedule-day-select[aria-pressed=true]{background:var(--green);color:white}
+.schedule-today-label,.schedule-note{font-size:9px;font-weight:650;color:var(--green);background:#e1edd6;padding:1px 4px;border-radius:4px;overflow-wrap:anywhere}
+.schedule-lesson+.schedule-lesson{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.schedule-lesson strong{display:block;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.schedule-time,.schedule-room{display:block;font-size:10px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .schedule-room{color:var(--green)}
-.schedule-off{font-size:12px;color:var(--muted)}
-.schedule-all{margin-top:30px;border-top:1px solid var(--line);padding-top:24px}
-#welcome .schedule-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;margin:8px 0 16px}
-.schedule-legend span{display:flex;align-items:center;gap:5px}
-.schedule-legend span:before{content:'';width:10px;height:10px;display:inline-block;border-radius:3px}
+.schedule-off{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.schedule-scroll-hint{display:none}
+#welcome .schedule-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;margin:8px 0 14px}
+.schedule-legend span{display:flex;align-items:center;gap:4px}
+.schedule-legend span:before{content:'';width:9px;height:9px;display:inline-block;border-radius:3px}
 .legend-class:before{background:#e1edd6}.legend-holiday:before{background:#fbe8df}.legend-today:before{border:2px solid var(--green)}
-.schedule-months{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}
-.schedule-month{border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}
-.schedule-month h4{margin:0;font-size:15px}
-#welcome .schedule-month-total{font-size:11px;margin:2px 0 10px}
-.schedule-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;text-align:center}
-.schedule-weekday{font-size:10px;color:var(--muted);padding:4px 0}
-.schedule-date{position:relative;font-size:12px;min-height:32px;padding:3px 0;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font-variant-numeric:tabular-nums}
+.schedule-months{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+.schedule-month{border:1px solid var(--line);border-radius:10px;padding:10px 6px;min-width:0}
+.schedule-month h4{margin:0 3px;font-size:14px}
+#welcome .schedule-month-total{font-size:10px;margin:2px 3px 6px}
+.schedule-calendar-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;text-align:center}
+.schedule-weekday{font-size:9px;color:var(--muted);padding:3px 0}
+.schedule-date{position:relative;font-size:10px;min-height:26px;padding:2px 0;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--muted);font-variant-numeric:tabular-nums}
 .schedule-date.is-class{background:#eaf2e2;color:var(--green);font-weight:650}
 .schedule-date.is-holiday{background:#fbeee7;color:#9c4d30}
 .schedule-date.is-outside{opacity:.3;cursor:default}
 .schedule-date.is-today{border:2px solid var(--green)}
 .schedule-date[aria-pressed=true]{background:var(--green);color:white}
 .schedule-date:hover:not(:disabled){box-shadow:inset 0 0 0 1px var(--green)}
-#schedule-detail{background:#f5f8f0;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-top:18px;scroll-margin-top:150px}
-#schedule-detail h4{margin:0 0 12px;font-size:15px}
-#schedule-detail .schedule-lessons{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
-#schedule-detail .schedule-lesson+.schedule-lesson{margin:0;padding:0;border:0}
-#welcome #schedule-source{font-size:11px;margin:14px 0 0}
-@media(min-width:801px) and (max-width:1200px){.schedule-weeks{grid-template-columns:1fr}.schedule-week{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}.schedule-week h3{grid-column:1/-1}.schedule-day{padding:10px}.schedule-months{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:800px){#welcome{padding:20px 14px}.schedule-weeks{grid-template-columns:1fr}.schedule-months{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.schedule-month{padding:10px 6px}.schedule-date{min-height:32px;font-size:11px}#welcome .schedule-heading h2{font-size:25px}#welcome #schedule-range{line-height:1.8}.schedule-week h3{padding:12px}.schedule-day{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;padding:12px}.schedule-day-heading{align-content:start;align-items:start;flex-direction:column;margin:0}.schedule-lesson strong{font-size:14px}.schedule-time,.schedule-room{font-size:12px}.schedule-weekday{font-size:10px}.schedule-all{margin-top:24px}}
-@media(max-width:360px){.schedule-months{grid-template-columns:1fr}.schedule-month{padding:12px}.schedule-date{min-height:36px;font-size:12px}}
-@media(max-width:600px){.schedule-months{grid-template-columns:1fr}.schedule-month{padding:12px}.schedule-date{min-height:40px;font-size:12px}}
+#schedule-detail{background:#f5f8f0;border:1px solid #ccdbc2;border-radius:10px;padding:10px;min-width:0;scroll-margin-top:150px}
+.schedule-detail-label{font-size:10px;color:var(--green);font-weight:650}
+#schedule-detail h4{margin:3px 0 10px;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+#schedule-detail .schedule-lesson strong{font-size:12px}
+#welcome #schedule-source{font-size:10px;margin:14px 0 0;overflow-wrap:anywhere}
+@media(min-width:1201px) and (max-width:1500px){.schedule-layout{gap:16px;grid-template-columns:minmax(0,2fr) minmax(0,1fr)}#welcome{padding:20px}.schedule-months{gap:8px}.schedule-month{padding:8px 4px}}
+@media(max-width:1200px){.schedule-layout{grid-template-columns:1fr;gap:28px}.schedule-all{border-top:1px solid var(--line);padding-top:20px}.schedule-weeks{min-width:620px}#welcome .schedule-scroll-hint{display:block;font-size:11px;line-height:1.8;margin-bottom:10px}.schedule-date{min-height:30px;font-size:11px}}
+@media(max-width:800px){#welcome{padding:20px 14px}.schedule-layout{gap:24px}#welcome .schedule-heading h2{font-size:25px}#welcome #schedule-meta{margin-bottom:20px}.schedule-months{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.schedule-date{min-height:32px;font-size:11px}.schedule-weekday{font-size:10px}#welcome .schedule-scroll-hint{display:block;font-size:11px;line-height:1.8;margin-bottom:10px}.schedule-month{padding:10px 6px}#schedule-detail .schedule-time,#schedule-detail .schedule-room{font-size:11px}}

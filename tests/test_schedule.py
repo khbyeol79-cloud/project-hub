@@ -62,9 +62,9 @@ class ScheduleTests(unittest.TestCase):
         sunday = self.snapshot(datetime(2026, 10, 11, 14, 59, tzinfo=timezone.utc))
         monday = self.snapshot(datetime(2026, 10, 11, 15, 0, tzinfo=timezone.utc))
         self.assertEqual((sunday['today'], sunday['week_start'], sunday['week_end']),
-                         ('2026-10-11', '2026-10-05', '2026-10-25'))
+                         ('2026-10-11', '2026-10-05', '2026-11-01'))
         self.assertEqual((monday['today'], monday['week_start'], monday['week_end']),
-                         ('2026-10-12', '2026-10-12', '2026-11-01'))
+                         ('2026-10-12', '2026-10-12', '2026-11-08'))
 
     def test_web_without_openpyxl_reads_using_existing_collector(self):
         original_import = builtins.__import__
@@ -101,7 +101,7 @@ import organizer.web
 
     def test_window_keeps_rolling_across_year(self):
         data = self.snapshot(datetime(2026, 12, 31, tzinfo=timezone.utc))
-        self.assertEqual((data['week_start'], data['week_end']), ('2026-12-28', '2027-01-17'))
+        self.assertEqual((data['week_start'], data['week_end']), ('2026-12-28', '2027-01-24'))
         self.assertNotIn('2027-02-04', data['days'])
 
     def test_parse_blanks_holidays_lunch_and_mixed_last_period(self):
