@@ -6,23 +6,30 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from contextlib import closing
 from pathlib import Path
 
 import discord
 from dotenv import load_dotenv
 
 if __package__:
-    from . import database
+    from . import database, projects, photo_channels
     from .drive import CATEGORY_FOLDERS
     from .upload_queue import UploadWorker, write_metadata
     from .history import HistoryCollector
     from .monitoring import HealthMonitor
+    from .file_search import SearchCommands
+    from .content_search import ContentIndexer, initialize as initialize_content
+    from . import message_archive
 else:
-    import database
+    import database, projects, photo_channels
     from drive import CATEGORY_FOLDERS
     from upload_queue import UploadWorker, write_metadata
     from history import HistoryCollector
     from monitoring import HealthMonitor
+    from file_search import SearchCommands
+    from content_search import ContentIndexer, initialize as initialize_content
+    import message_archive
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STORAGE_DIR = BASE_DIR / "storage"
@@ -44,6 +51,8 @@ def load_channel_map(section="channels"):
         for key, category in channels.items()
     ):
         raise ValueError("channels.json의 채널 ID와 카테고리를 확인하세요.")
+    if section == "channels" and CONFIG_PATH == BASE_DIR / "config" / "channels.json":
+        channels.update(projects.TEAM_CHANNEL_IDS)
     return channels
 
 
@@ -83,19 +92,44 @@ class CollectorClient(discord.Client):
     history_collector = None
     monitor_task = None
     health_monitor = None
+    content_task = None
+    content_indexer = None
+    message_archive = None
+    message_collector = None
+    message_task = None
 
     async def setup_hook(self):
         alert_channel = os.getenv("DISCORD_ALERT_CHANNEL_ID", "").strip()
         if alert_channel and (not alert_channel.isascii() or not alert_channel.isdecimal() or int(alert_channel) <= 0):
             raise ValueError("DISCORD_ALERT_CHANNEL_ID must be a positive channel ID or empty")
-        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message, forums=FORUM_MAP)
+        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message, forums=FORUM_MAP,
+            full_history_channels=[cid for cid, category in CHANNEL_MAP.items() if category == photo_channels.CATEGORY])
         self.history_collector.initialize()
         self.retry_task = asyncio.create_task(retry_uploads())
         self.history_task = asyncio.create_task(self.history_collector.run())
         self.health_monitor = HealthMonitor(self, {**CHANNEL_MAP, **FORUM_MAP}, alert_channel)
         self.monitor_task = asyncio.create_task(self.health_monitor.run())
+        await asyncio.to_thread(initialize_content)
+        self.content_indexer = ContentIndexer(STORAGE_DIR)
+        self.content_task = asyncio.create_task(self.content_indexer.run())
+        await asyncio.to_thread(message_archive.initialize)
+        self.message_archive = message_archive.MessageArchive(self, CHANNEL_MAP, FORUM_MAP)
+        self.message_collector = HistoryCollector(self, CHANNEL_MAP, self.message_archive.save,
+            forums=FORUM_MAP, cursor_store=message_archive, health_prefix='messages:')
+        self.message_collector.initialize()
+        self.message_task = asyncio.create_task(self.message_collector.run())
 
     async def close(self):
+        if self.message_task:
+            self.message_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.message_task
+            self.message_task = None
+        if self.content_task:
+            self.content_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.content_task
+            self.content_task = None
         if self.monitor_task:
             self.monitor_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -117,26 +151,76 @@ class CollectorClient(discord.Client):
 intents = discord.Intents.default()
 intents.message_content = True
 client = CollectorClient(intents=intents)
+search_commands = SearchCommands(client)
+
+
+async def connect_project_channels():
+    guild = client.get_guild(int(projects.GUILD_ID))
+    if guild is None:
+        return
+    resolved = projects.discover(guild.text_channels)
+    photos = photo_channels.discover(guild.text_channels)
+    with closing(database.get_connection()) as db:
+        saved = projects.stored_channels(db)
+    current = {str(c.id) for c in guild.text_channels}
+    resolved.update({cid: category for cid, category in saved.items() if cid in current})
+    # Never override an established A/B team or configured channel with a name match.
+    photos = {cid: category for cid, category in photos.items()
+              if CHANNEL_MAP.get(cid, category) == category and cid not in resolved}
+    resolved.update(photos)
+    CHANNEL_MAP.update(resolved)
+    for collector in (client.history_collector, client.message_collector):
+        if collector:
+            collector.channel_ids = tuple(CHANNEL_MAP)
+            collector.forum_ids = tuple(dict.fromkeys([*FORUM_MAP, *resolved]))
+            if collector is client.history_collector:
+                collector.full_history_channels = {cid for cid, category in CHANNEL_MAP.items()
+                                                    if category == photo_channels.CATEGORY}
+            collector.initialize()
+            collector.wakeup.set()
+    if client.message_archive:
+        client.message_archive.channels.update(CHANNEL_MAP)
+    if client.health_monitor:
+        client.health_monitor.channel_map.update(CHANNEL_MAP)
+    logger.info('PROJECT_CHANNELS_READY | teams=%d | photo_channels=%d',
+                sum(category in projects.TEAM_CATEGORIES.values() for category in resolved.values()),
+                sum(category == photo_channels.CATEGORY for category in CHANNEL_MAP.values()))
+
+
+@client.event
+async def on_guild_channel_create(channel):
+    if str(getattr(getattr(channel, 'guild', None), 'id', '')) == projects.GUILD_ID:
+        await connect_project_channels()
 
 
 @client.event
 async def on_ready():
+    await connect_project_channels()
     logger.info("Discord 로그인 완료 | bot=%s | 감지채널=%d", client.user, len(CHANNEL_MAP))
     logger.info("FORUM_COLLECTION | forums=%d", len(FORUM_MAP))
     if client.history_collector:
         client.history_collector.wakeup.set()
+    if client.message_collector:
+        client.message_collector.wakeup.set()
+        logger.info('MESSAGE_ARCHIVE_READY | channels=%s | forums=%s | initial_hours=24',
+                    len(CHANNEL_MAP), len(FORUM_MAP))
+    await search_commands.sync({**CHANNEL_MAP, **FORUM_MAP})
 
 
 @client.event
 async def on_resumed():
     if client.history_collector:
         client.history_collector.wakeup.set()
+    if client.message_collector:
+        client.message_collector.wakeup.set()
 
 
 @client.event
 async def on_thread_create(thread):
-    if str(thread.parent_id) in FORUM_MAP and client.history_collector:
+    if str(thread.parent_id) in {**CHANNEL_MAP, **FORUM_MAP} and client.history_collector:
         client.history_collector.wakeup.set()
+    if str(thread.parent_id) in {**CHANNEL_MAP, **FORUM_MAP} and client.message_collector:
+        client.message_collector.wakeup.set()
 
 
 async def collect_attachment(message, attachment, index, category):
@@ -156,7 +240,7 @@ async def collect_attachment(message, attachment, index, category):
     finally:
         temporary.unlink(missing_ok=True)
     sha256 = await asyncio.to_thread(calculate_sha256, save_path)
-    duplicate = database.find_existing_file(attachment.filename, sha256)
+    duplicate = database.find_existing_file(attachment.filename, sha256, category, message.guild.id if message.guild else None)
     channel_id = str(message.channel.id)
     metadata = {
         "discord_message_id": str(message.id),
@@ -193,14 +277,16 @@ async def collect_attachment(message, attachment, index, category):
 async def process_message(message, *, upload=True):
     channel_id = str(message.channel.id)
     parent_id = str(getattr(message.channel, "parent_id", ""))
-    category = CHANNEL_MAP.get(channel_id) or FORUM_MAP.get(parent_id)
+    category = CHANNEL_MAP.get(channel_id) or CHANNEL_MAP.get(parent_id) or FORUM_MAP.get(parent_id)
     if message.author.bot or not message.attachments or category is None:
         return True
     complete = True
     for index, attachment in enumerate(message.attachments, start=1):
+        if category == photo_channels.CATEGORY and not photo_channels.is_photo(attachment):
+            continue
         try:
             async with collection_lock:
-                if parent_id in FORUM_MAP:
+                if parent_id in FORUM_MAP or parent_id in CHANNEL_MAP:
                     database.initialize_channel_cursor(channel_id, 0)
                 file_id, created = await collect_attachment(message, attachment, index, category)
             if created and upload:
@@ -216,6 +302,8 @@ async def process_message(message, *, upload=True):
 
 @client.event
 async def on_message(message):
+    if client.message_archive:
+        await client.message_archive.save(message)
     if client.health_monitor:
         try:
             await client.health_monitor.handle_status(message)
@@ -224,9 +312,37 @@ async def on_message(message):
     await process_message(message)
 
 
+async def archive_event(action, payload):
+    if client.message_archive is None:
+        return
+    try:
+        await getattr(client.message_archive, action)(payload)
+        await asyncio.to_thread(database.record_health, 'messages:events')
+    except Exception as error:
+        logger.error('MESSAGE_EVENT_FAILED | action=%s | error=%s', action, type(error).__name__)
+        await asyncio.to_thread(database.record_health, 'messages:events', type(error).__name__)
+
+
+@client.event
+async def on_raw_message_edit(payload):
+    await archive_event('edited', payload)
+
+
+@client.event
+async def on_raw_message_delete(payload):
+    await archive_event('deleted', payload)
+
+
+@client.event
+async def on_raw_bulk_message_delete(payload):
+    await archive_event('deleted', payload)
+
+
 def main():
     global CHANNEL_MAP, FORUM_MAP, drive_executor, upload_worker
     load_dotenv(BASE_DIR / ".env")
+    # Use the exact same photo-folder configuration as the web gallery.
+    load_dotenv(Path.home()/'.config/project-hub/library.env', override=False)
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN을 환경변수 또는 로컬 .env에 설정하세요.")

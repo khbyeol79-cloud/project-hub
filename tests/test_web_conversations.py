@@ -1,0 +1,262 @@
+from contextlib import closing
+from datetime import datetime, timezone, timedelta
+import sqlite3
+import unittest
+import test_library
+from organizer.conversations import Conversations, discord_url
+from organizer.web import create_app
+
+
+class WebConversationTests(unittest.TestCase):
+    setUp = test_library.LibraryTests.setUp
+
+    def prepare(self):
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.executescript('''ALTER TABLE files ADD COLUMN discord_message_id TEXT;
+                ALTER TABLE files ADD COLUMN discord_guild_id TEXT;
+                CREATE TABLE conversation_messages(message_id TEXT PRIMARY KEY,guild_id TEXT,
+                channel_id TEXT,parent_id TEXT,category TEXT,author_name TEXT,content TEXT,
+                search_content TEXT,created_at TEXT,edited_at TEXT,revision REAL);
+                CREATE TABLE conversation_tombstones(message_id TEXT PRIMARY KEY);
+                UPDATE files SET discord_message_id='101',discord_guild_id='1';''')
+            for mid,channel,parent in [('101','123',None),('102','456','555'),('103','999',None)]:
+                db.execute('INSERT INTO conversation_messages VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                    (mid,'1',channel,parent,'plc','팀원','sensor Friday <script>bad()</script>',
+                     'sensor friday <script>bad()</script>',datetime.now(timezone.utc).isoformat(),None,1.0))
+        self.app=create_app({'TESTING':True,'DB_PATH':self.db,'STORAGE':self.storage,
+            'SECRET_KEY':'test-key','PUBLIC_ACCESS':True,'PUBLIC_ORIGIN':'https://example.test',
+            'MESSAGE_CHANNELS':['123','555']},self.ai)
+        self.client=self.app.test_client()
+
+    def test_disabled_and_missing_archive_do_not_break_library(self):
+        self.assertFalse(self.client.get('/library/api/messages').json['enabled'])
+        self.assertEqual(Conversations(self.db,['123']).search()['messages'],[])
+
+    def test_search_scope_forums_links_and_attachments(self):
+        self.prepare()
+        rows=self.client.get('/library/api/messages?q=sensor').json['messages']
+        self.assertEqual({r['message_id'] for r in rows},{'101','102'})
+        row=next(r for r in rows if r['message_id']=='101')
+        self.assertEqual(row['url'],'https://discord.com/channels/1/123/101')
+        self.assertEqual(row['files'][0]['id'],1)
+        self.assertEqual(len(self.client.get('/library/api/messages?channel=555').json['messages']),1)
+        self.assertEqual(self.client.get('/library/api/messages?channel=999').json['messages'],[])
+        self.assertEqual(self.client.get('/library/api/messages?q=%27%20OR%201=1').json['messages'],[])
+        self.assertIsNone(discord_url('1','123','javascript:alert(1)'))
+
+    def test_dates_pagination_and_deleted_messages(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE conversation_messages SET created_at=? WHERE message_id=?',
+                       ((datetime.now(timezone.utc)-timedelta(days=10)).isoformat(),'101'))
+        c=Conversations(self.db,['123','555'])
+        self.assertEqual([r['message_id'] for r in c.search(days=7)['messages']],['102'])
+        first=c.search(limit=1);second=c.search(limit=1,offset=1)
+        self.assertTrue(first['more'])
+        self.assertNotEqual(first['messages'][0]['message_id'],second['messages'][0]['message_id'])
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("INSERT INTO conversation_tombstones VALUES('102')")
+        self.assertEqual([r['message_id'] for r in c.search()['messages']],['101'])
+        self.assertEqual(self.client.get('/library/api/messages?days=bad').status_code,400)
+        self.assertEqual(self.client.get('/library/api/messages?offset=-1').status_code,400)
+
+    def test_date_order_covers_archive_and_keeps_channel_scope(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            now = datetime.now(timezone.utc)
+            db.execute('UPDATE conversation_messages SET created_at=? WHERE message_id=?',
+                       ((now-timedelta(days=10)).isoformat(), '101'))
+            for i in range(25):
+                db.execute('INSERT INTO conversation_messages VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           (str(200+i),'1','123',None,'plc','팀원','sensor','sensor',
+                            (now+timedelta(minutes=i)).isoformat(),None,1.0))
+        asc = self.client.get('/library/api/messages?sort=date_asc').json
+        later = self.client.get('/library/api/messages?sort=date_asc&offset=20').json
+        desc = self.client.get('/library/api/messages?sort=date_desc').json
+        self.assertTrue(asc['more'])
+        self.assertEqual(asc['messages'][0]['message_id'], '101')
+        self.assertEqual(desc['messages'][0]['message_id'], '224')
+        self.assertEqual(later['messages'][-1]['message_id'], '224')
+        self.assertNotIn('103', [m['message_id'] for m in asc['messages']+later['messages']])
+        self.assertEqual(self.client.get('/library/api/messages?sort=name_asc').status_code, 400)
+        self.assertEqual(self.client.get('/library/api/messages?sort=invalid').status_code, 400)
+
+    def test_integrated_sources_and_budget_no_provider_for_no_match(self):
+        self.prepare()
+        response=self.client.post('/library/api/ai',headers=self.post_headers,
+                                  json={'task':'ask','question':'sensor'})
+        self.assertEqual(response.status_code,200)
+        sources=self.ai.run.call_args.args[1]
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        self.assertEqual({s['message_id'] for s in sources if s.get('kind')=='message'},{'101','102'})
+        self.assertLessEqual(sum(len(s['text']) for s in sources),12000)
+        self.ai.run.reset_mock()
+        self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'unfindable'})
+        self.ai.run.assert_not_called()
+        self.assertEqual(self.client.post('/library/api/ai',headers=self.post_headers,
+                         json={'task':'ask','question':'sensor','days':'7'}).status_code,400)
+
+    def test_edit_or_delete_during_generation_does_not_return_stale_answer(self):
+        self.prepare()
+        def changed(*args):
+            with closing(sqlite3.connect(self.db)) as db, db:
+                db.execute("UPDATE conversation_messages SET revision=2 WHERE message_id='101'")
+            return {'answer':'old answer','sources':[]}
+        self.ai.run.side_effect=changed
+        r=self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'sensor'})
+        self.assertEqual(r.status_code,422)
+        self.assertNotIn('old answer',r.text)
+
+    def test_channel_allowlist_is_not_a_request_parameter(self):
+        self.prepare()
+        r=self.client.get('/library/api/messages?channels=999')
+        self.assertNotIn('103',[m['message_id'] for m in r.json['messages']])
+        self.assertEqual(self.client.post('/library/api/ai',json={'task':'ask','question':'sensor'}).status_code,403)
+
+    def context_fixture(self):
+        self.prepare()
+        now=datetime.now(timezone.utc)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('ALTER TABLE conversation_messages ADD COLUMN reply_message_id TEXT')
+            db.execute("UPDATE conversation_messages SET content='deadline',search_content='deadline',created_at=?,reply_message_id='201' WHERE message_id='101'",(now.isoformat(),))
+            for mid,channel,minutes,reply in [('201','123',-60,None),('202','123',1,'101'),
+                    ('203','999',1,'101'),('204','123',2,None),('205','123',30,None),
+                    ('206','123',-1,None),('207','456',1,'101')]:
+                db.execute('INSERT INTO conversation_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (mid,'1',channel,None,'plc','팀원','금요일까지 마무리','금요일까지 마무리',
+                     (now+timedelta(minutes=minutes)).isoformat(),None,1.0,reply))
+            db.execute("INSERT INTO conversation_tombstones VALUES('204')")
+
+    def test_message_deep_link_obeys_scope_and_deletion_even_with_empty_text(self):
+        self.prepare()
+        self.assertEqual(self.client.get('/library/api/messages/101').json['message_id'],'101')
+        self.assertEqual(self.client.get('/library/api/messages/103').status_code,404)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE conversation_messages SET content='' WHERE message_id='101'")
+        self.assertEqual(self.client.get('/library/api/messages/101').json['files'][0]['id'],1)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("INSERT INTO conversation_tombstones VALUES('101')")
+        self.assertEqual(self.client.get('/library/api/messages/101').status_code,404)
+        self.assertEqual(self.client.get('/library/api/messages/bad').status_code,404)
+
+    def test_processing_counts_stale_content_and_health_without_raw_errors(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.executescript('''ALTER TABLE files ADD COLUMN upload_status TEXT;
+                UPDATE files SET upload_status='failed';
+                UPDATE content_documents SET source_sha256='stale';
+                CREATE TABLE health_checks(check_key TEXT,failures INTEGER,last_checked_at TEXT,last_error TEXT);''')
+            for cid in ['123','555']:
+                for prefix in ['history:','messages:']:
+                    db.execute('INSERT INTO health_checks VALUES(?,?,?,?)',
+                        (prefix+cid,0,datetime.now(timezone.utc).isoformat(),'private error sentinel'))
+        result=self.client.get('/library/api/processing')
+        self.assertEqual(result.json['content'],{'pending':1})
+        self.assertEqual(result.json['drive'],{'failed':1})
+        self.assertEqual(result.json['collection'],'healthy')
+        self.assertNotIn('sentinel',result.text)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE health_checks SET failures=1 WHERE check_key='history:123'")
+        self.assertEqual(self.client.get('/library/api/processing').json['collection'],'attention')
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE health_checks SET failures=0,last_checked_at='2000-01-01 00:00:00'")
+        self.assertEqual(self.client.get('/library/api/processing').json['collection'],'stale')
+        self.assertEqual(self.client.get('/library/api/files/1').json['upload_status'],'failed')
+
+    def test_processing_endpoint_requires_library_access(self):
+        self.assertEqual(self.app.test_client().get('/library/api/processing').status_code,401)
+
+    def test_ai_channel_scopes_files_messages_and_forum_parent(self):
+        self.prepare()
+        self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':'123'})
+        sources=self.ai.run.call_args.args[1]
+        self.assertEqual({s['message_id'] for s in sources if s.get('kind')=='message'},{'101'})
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute('ALTER TABLE files ADD COLUMN discord_parent_channel_id TEXT')
+            db.execute("UPDATE files SET discord_channel_id='456',discord_parent_channel_id='555'")
+        self.assertEqual(self.client.get('/library/api/files?channel=555').json['total'],1)
+        self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':'555'})
+        sources=self.ai.run.call_args.args[1]
+        self.assertEqual({s['message_id'] for s in sources if s.get('kind')=='message'},{'102'})
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        self.assertEqual(self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':['123']}).status_code,400)
+
+    def test_ai_period_filters_files_and_excludes_empty_scope_without_call(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE files SET uploaded_at='2000-01-01'")
+        self.assertEqual(self.client.get('/library/api/files?days=7').json['total'],0)
+        self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','days':7})
+        self.assertTrue(all(s.get('kind')=='message' for s in self.ai.run.call_args.args[1]))
+        self.ai.run.reset_mock()
+        r=self.client.post('/library/api/ai',headers=self.post_headers,
+            json={'task':'ask','question':'sensor','channel':'777'})
+        self.assertEqual(r.status_code,200)
+        self.ai.run.assert_not_called()
+        self.assertEqual(self.client.get('/library/api/files?days=bad').status_code,400)
+
+    def test_file_excerpt_uses_current_body_and_query_region(self):
+        self.prepare()
+        body='before '*100+'sensor <script>plain text</script> after'
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute('UPDATE content_pages SET body=?,search_body=?',(body,body.casefold()))
+        excerpt=self.client.get('/library/api/files?q=sensor').json['files'][0]['excerpt']
+        self.assertIn('sensor',excerpt)
+        self.assertLessEqual(len(excerpt),221)
+        with closing(sqlite3.connect(self.db)) as db,db:
+            db.execute("UPDATE content_documents SET source_sha256='stale'")
+        self.assertEqual(self.client.get('/library/api/files?q=sample').json['files'][0]['excerpt'],'')
+
+    def test_weekly_saved_without_provider_on_read_and_invalidated_on_edit(self):
+        self.prepare()
+        self.assertIsNone(self.client.get('/library/api/weekly').json['saved'])
+        self.ai.run.assert_not_called()
+        r=self.client.post('/library/api/weekly',headers=self.post_headers,json={})
+        self.assertEqual(r.status_code,200)
+        self.ai.run.reset_mock()
+        self.assertEqual(self.client.get('/library/api/weekly').json['saved']['answer'],r.json['answer'])
+        self.ai.run.assert_not_called()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE conversation_messages SET revision=2 WHERE message_id='101'")
+        self.assertIsNone(self.client.get('/library/api/weekly').json['saved'])
+
+    def test_weekly_filters_old_files_and_requires_csrf(self):
+        self.prepare()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE files SET uploaded_at='2000-01-01'")
+        self.assertEqual(self.client.get('/library/api/weekly').json['files'],[])
+        self.assertEqual(self.client.post('/library/api/weekly',json={}).status_code,403)
+        r=self.client.post('/library/api/weekly',headers=self.post_headers,json={})
+        self.assertEqual(r.status_code,200)
+        self.assertEqual(r.json['matched_files'],0)
+        self.assertTrue(all(s.get('kind')=='message' for s in self.ai.run.call_args.args[1]))
+
+    def test_context_includes_reply_and_neighbors_with_attached_file_without_keyword(self):
+        self.context_fixture()
+        r=self.client.post('/library/api/ai',headers=self.post_headers,json={'task':'ask','question':'deadline'})
+        self.assertEqual(r.status_code,200)
+        sources=self.ai.run.call_args.args[1]
+        ids={s['message_id'] for s in sources if s.get('kind')=='message'}
+        self.assertEqual(ids,{'101','201','202','206'})
+        self.assertTrue(any(s.get('file_id')==1 for s in sources))
+        self.assertEqual(len(ids),len([s for s in sources if s.get('kind')=='message']))
+        self.assertLessEqual(sum(len(s['text']) for s in sources),12000)
+
+    def test_context_respects_date_guild_and_revision_checks(self):
+        self.context_fixture()
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE conversation_messages SET created_at=? WHERE message_id=?',
+                       ((datetime.now(timezone.utc)-timedelta(days=10)).isoformat(),'201'))
+            db.execute("UPDATE conversation_messages SET guild_id='2' WHERE message_id='206'")
+        c=Conversations(self.db,['123','555'])
+        sources=c.sources('deadline',days=7)
+        self.assertEqual({s['message_id'] for s in sources},{'101','202'})
+        self.assertTrue(c.current(sources))
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("UPDATE conversation_messages SET revision=2 WHERE message_id='202'")
+        self.assertFalse(c.current(sources))

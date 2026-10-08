@@ -103,9 +103,19 @@ def init_db():
     conn.close()
 
 
-def find_existing_file(original_filename, sha256):
+def find_existing_file(original_filename, sha256, category=None, guild_id=None):
     conn = get_connection()
     cursor = conn.cursor()
+
+    if __package__:
+        from .projects import category_scope, predicate
+    else:
+        from projects import category_scope, predicate
+    scope = predicate(category_scope(category)) if category is not None else "1=1"
+    scope_values = []
+    if guild_id is not None:
+        scope += " AND discord_guild_id=?"
+        scope_values.append(str(guild_id))
 
     # 내용이 완전히 같은 파일 확인
     cursor.execute("""
@@ -115,10 +125,10 @@ def find_existing_file(original_filename, sha256):
             sha256,
             version_group
         FROM files
-        WHERE sha256 = ?
+        WHERE sha256 = ? AND """ + scope + """
         ORDER BY id ASC
         LIMIT 1
-    """, (sha256,))
+    """, [sha256, *scope_values])
 
     same_hash = cursor.fetchone()
 
@@ -143,10 +153,10 @@ def find_existing_file(original_filename, sha256):
             sha256,
             version_group
         FROM files
-        WHERE original_filename = ?
+        WHERE original_filename = ? AND """ + scope + """
         ORDER BY id ASC
         LIMIT 1
-    """, (original_filename,))
+    """, [original_filename, *scope_values])
 
     same_name = cursor.fetchone()
 
@@ -316,7 +326,9 @@ def initialize_channel_cursor(channel_id, fallback_id):
         latest = conn.execute("""SELECT MAX(CAST(discord_message_id AS INTEGER))
             FROM files WHERE discord_channel_id = ?""", (str(channel_id),)).fetchone()[0]
         # Include the last stored message: it may contain a partially saved batch.
-        initial = max(0, latest - 1) if latest else int(fallback_id)
+        # Zero explicitly requests a first import from the beginning (photos/threads).
+        # INSERT OR IGNORE keeps any previously saved checkpoint unchanged.
+        initial = 0 if int(fallback_id) == 0 else (max(0, latest - 1) if latest else int(fallback_id))
         conn.execute("INSERT OR IGNORE INTO channel_cursors(channel_id, last_message_id) VALUES (?, ?)",
                      (str(channel_id), str(initial)))
 

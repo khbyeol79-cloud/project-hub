@@ -1,0 +1,11 @@
+[Unit]
+Description=Project Hub daily backup at 04:00 Korea time
+
+[Timer]
+OnCalendar=*-*-* 04:00:00 Asia/Seoul
+Persistent=true
+AccuracySec=1min
+Unit=project-hub-backup.service
+
+[Install]
+WantedBy=timers.target

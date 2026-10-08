@@ -324,6 +324,7 @@ __marimo__/
 # Google OAuth credentials
 credentials.json
 token.json
+photos-token.json
 
 # Google OAuth / service account 계열
 client_secret*.json
@@ -403,3 +404,13 @@ Desktop.ini
 *.db-wal
 *.db-shm
 *.db-journal
+
+# AI runtime configuration, credentials, and local results
+ai.env
+google-ai-service-account.json
+project-hub-ai-state/
+library.env
+library-share-url.txt
+
+weekly-summary.json
+weekly-summary.tmp

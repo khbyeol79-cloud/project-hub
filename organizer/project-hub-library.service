@@ -1,0 +1,23 @@
+[Unit]
+Description=Project Hub shared document library
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=khb
+WorkingDirectory=/home/khb/project-hub
+ExecStart=/home/khb/.local/share/project-hub-library/venv311/bin/python -m organizer.web
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/khb/.local/state/project-hub-ai
+Environment=PYTHONDONTWRITEBYTECODE=1
+MemoryMax=300M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target
