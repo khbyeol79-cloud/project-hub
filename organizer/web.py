@@ -25,6 +25,7 @@ from .conversations import Conversations
 from . import versions
 from bot import projects
 from .photos import Photos, PhotoError, photo_service
+from .schedule import schedule_snapshot, ScheduleError
 
 TEXT_PREVIEW_SUFFIXES = {'.md', '.markdown', '.txt', '.py', '.c', '.cpp', '.h', '.hpp', '.java',
                          '.js', '.ts', '.json', '.csv', '.yaml', '.yml', '.ini', '.cfg', '.css'}
@@ -100,7 +101,7 @@ def create_app(config=None, ai=None):
             if (not app.config['PUBLIC_ORIGIN'] or request.headers.get('Origin') != app.config['PUBLIC_ORIGIN']
                     or request.headers.get('X-Requested-With') != 'ProjectHub' or not request.is_json):
                 abort(403)
-        if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/assets/reading.js', '/library/assets/photos.js', '/library/api/access'}:
+        if request.path in {'/library/', '/library/assets/app.js', '/library/assets/style.css', '/library/assets/reading.js', '/library/assets/photos.js', '/library/assets/schedule.js', '/library/api/access'}:
             return
         if app.config['PUBLIC_ACCESS']:
             return
@@ -146,9 +147,27 @@ def create_app(config=None, ai=None):
 
     @app.get('/library/assets/<name>')
     def asset(name):
-        if name not in {'app.js', 'style.css', 'reading.js', 'photos.js'}:
+        if name not in {'app.js', 'style.css', 'reading.js', 'photos.js', 'schedule.js'}:
             abort(404)
         return send_file(ROOT / 'static' / name)
+
+    @app.get('/library/api/schedule')
+    def education_schedule():
+        scope = request_scope()
+        with closing(connect()) as db:
+            rows = db.execute("SELECT id, original_filename FROM files WHERE original_filename LIKE '%일정표%.xlsx' AND " +
+                              projects.predicate(scope) + " ORDER BY julianday(uploaded_at) DESC, id DESC LIMIT 20").fetchall()
+        if not rows:
+            return jsonify(available=False, notice='이 자료 범위에 교육 일정표가 아직 없습니다.')
+        row = rows[0]
+        _, path = local_file(row['id'])
+        try:
+            return jsonify(schedule_snapshot(path, row['original_filename']))
+        except ScheduleError as exc:
+            return jsonify(error=str(exc)), 422
+        except Exception as exc:
+            app.logger.warning('SCHEDULE_READ_FAILED type=%s', type(exc).__name__)
+            return jsonify(error='일정표를 읽지 못했습니다. 원본 엑셀을 확인해 주세요.'), 422
 
     @app.get('/library/api/photos')
     def photo_list():

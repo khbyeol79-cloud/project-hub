@@ -19,7 +19,7 @@ function chooseScope(){
  $('query').value='';$('channel').replaceChildren(new Option('모든 채널',''));$('extension').replaceChildren(new Option('모든 확장자',''));$('files').replaceChildren();$('count').textContent='';
  const wasPhotos=!$('photos-panel').hidden;closePhotos();$('pages').replaceChildren();$('file-versions').replaceChildren();$('document').hidden=$('ai-panel').hidden=$('weekly-panel').hidden=true;$('welcome').hidden=false;
  $('answer').hidden=true;$('answer-body').textContent='';$('sources').replaceChildren();$('ai-status').textContent='';weeklyResult(null);$('weekly-files').replaceChildren();$('weekly-messages').replaceChildren();
- history.replaceState(null,'',scopedUrl(location.pathname));scopeLabel();loadFiles();loadProcessing();if(wasPhotos)openPhotos();
+ history.replaceState(null,'',scopedUrl(location.pathname));scopeLabel();loadFiles();loadProcessing();if(wasPhotos)openPhotos();else openSchedule();
 }
 document.querySelectorAll('[data-scope]').forEach(b=>b.onclick=()=>{
  const scope=b.dataset.scope;if(scope===(activeProject==='main'?'main':activeTeam))return;
@@ -55,7 +55,7 @@ function setSidebar(open){open=Boolean(open&&matchMedia('(max-width:800px)').mat
 $('menu-toggle').onclick=()=>setSidebar(!document.body.classList.contains('sidebar-open'));
 $('sidebar-close').onclick=()=>setSidebar(false);$('sidebar-shade').onclick=()=>setSidebar(false);
 document.addEventListener('keydown',e=>{if(!document.body.classList.contains('sidebar-open'))return;if(e.key==='Escape'){setSidebar(false);return;}if(e.key==='Tab'){const items=[...$('library-sidebar').querySelectorAll('button,input,select,[tabindex="0"]')].filter(x=>!x.hidden&&!x.disabled&&x.getClientRects().length);const first=items[0],last=items[items.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}});
-mobile.addEventListener('change',()=>setSidebar(false));setSidebar(mobile.matches);
+mobile.addEventListener('change',()=>setSidebar(false));setSidebar(false);
 
 async function loadMessages(append=false){
  const seq=++searching;if(!append)offset=0;
@@ -186,7 +186,7 @@ async function copyItemLink(button){
 }
 async function openLinked(){
  const params=new URLSearchParams(location.search),file=params.get('file'),message=params.get('message');
- if(file===null&&message===null){if(params.get('view')==='photos')openPhotos();return;}
+ if(file===null&&message===null){if(params.get('view')==='photos')openPhotos();else openSchedule();return;}
  if((file&&message)||!/^\d{1,20}$/.test(file||message||'')){$('list-message').textContent='자료 주소가 올바르지 않습니다.';return;}
  try{if(file)await openFile(file);else openMessage(await api('messages/'+message));}
  catch(e){$('list-message').textContent='대화를 열 수 없습니다. 삭제되었거나 공개 범위 밖일 수 있습니다.';}
