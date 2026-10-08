@@ -141,7 +141,8 @@ import organizer.web
             for id, name, uploaded in [(1, '샘플 일정표.xlsx', '2027-01-01'), (2, '수정 일정표.xlsx', '2027-01-02')]:
                 connection.execute('INSERT INTO files VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                     (id, name, 'test', '1', 'plc', uploaded, 100, 1, None, 'test-hash', str(self.path)))
-        app = create_app({'TESTING': True, 'DB_PATH': db, 'STORAGE': self.storage, 'SECRET_KEY': 'test-only'})
+        app = create_app({'TESTING': True, 'DB_PATH': db, 'STORAGE': self.storage,
+                          'SECRET_KEY': 'test-only', 'SCHEDULE_DIR': self.root/'private-schedule'})
         client = app.test_client()
         self.assertEqual(client.get('/library/api/schedule').status_code, 401)
         with client.get('/library/assets/schedule.js') as asset:
