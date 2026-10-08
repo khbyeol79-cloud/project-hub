@@ -109,8 +109,10 @@ def parse_schedule(path):
             lessons = days[current.isoformat()]['lessons']
             if lessons and lessons[-1]['subject'] == subject and lessons[-1]['room'] == room and lessons[-1]['end_period'] == period - 1 and period != 5:
                 lessons[-1].update(end_period=period, end=times[2])
+                lessons[-1]['period_ends'].append(times[2])
             else:
-                lessons.append(dict(start_period=period, end_period=period, start=times[1], end=times[2], subject=subject, room=room))
+                lessons.append(dict(start_period=period, end_period=period, start=times[1], end=times[2],
+                                    subject=subject, room=room, period_ends=[times[2]]))
         teaching = [date.fromisoformat(key) for key, day in days.items() if day['lessons']]
         if not teaching:
             raise ScheduleError('일정표에 등록된 수업이 없습니다.')
@@ -155,9 +157,10 @@ def schedule_snapshot(path, source, now=None):
     stat = path.stat()
     data = deepcopy(_cached_schedule(str(path.resolve()), stat.st_mtime_ns, stat.st_size))
     now = now or datetime.now(ZoneInfo('Asia/Seoul'))
-    today = now.astimezone(ZoneInfo('Asia/Seoul')).date()
+    now = now.astimezone(ZoneInfo('Asia/Seoul'))
+    today = now.date()
     sunday = today - timedelta(days=(today.weekday()+1) % 7)
-    data.update(source=source, available=True, timezone='Asia/Seoul', today=today.isoformat(),
+    data.update(source=source, available=True, timezone='Asia/Seoul', today=today.isoformat(), as_of=now.isoformat(),
                 week_start=sunday.isoformat(), week_end=(sunday+timedelta(days=27)).isoformat())
     return data
 

@@ -117,6 +117,24 @@
 .schedule-room{color:var(--green)}
 .schedule-off{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
 .schedule-scroll-hint{display:none}
+.schedule-progress{margin-top:24px;padding-top:20px;border-top:1px solid var(--line)}
+#welcome #schedule-progress-total{margin:8px 0 4px;font-size:14px;font-weight:650;color:var(--green)}
+#welcome .schedule-progress-note,#welcome #schedule-progress-as-of{font-size:10px;line-height:1.8;margin:0 0 12px}
+#welcome #schedule-progress-as-of{margin:10px 0 0}
+.schedule-subject-table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px;text-align:left}
+.schedule-subject-table th,.schedule-subject-table td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:middle;overflow-wrap:anywhere}
+.schedule-subject-table thead{background:#f3f7ee;color:var(--muted);font-size:11px}
+.schedule-subject-table th:first-child{width:44%}
+.schedule-subject-table th:nth-child(2){width:34%}
+.schedule-subject-table th:nth-child(3){width:22%}
+.schedule-subject-table tbody th{font-weight:600}
+.schedule-subject-table td{font-variant-numeric:tabular-nums}
+.schedule-subject-table progress{display:block;width:100%;height:5px;margin-top:6px;border:0;border-radius:4px;background:#e8eee4;accent-color:var(--green);overflow:hidden}
+.schedule-subject-table progress::-webkit-progress-bar{background:#e8eee4;border-radius:4px}
+.schedule-subject-table progress::-webkit-progress-value{background:var(--green);border-radius:4px}
+.schedule-subject-table progress::-moz-progress-bar{background:var(--green);border-radius:4px}
+.schedule-subject-done{display:inline-block;margin-left:6px;font-size:9px;font-weight:650;color:var(--green);background:#e1edd6;padding:1px 5px;border-radius:4px}
+@media(max-width:800px){.schedule-subject-table{font-size:11px}.schedule-subject-table th,.schedule-subject-table td{padding:9px 5px}#welcome #schedule-progress-total{font-size:13px}}
 #welcome .schedule-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10px;margin:8px 0 14px}
 .schedule-legend span{display:flex;align-items:center;gap:4px}
 .schedule-legend span:before{content:'';width:9px;height:9px;display:inline-block;border-radius:3px}

@@ -68,6 +68,7 @@ class ScheduleTests(unittest.TestCase):
                          ('2026-10-11', '2026-10-11', '2026-11-07'))
         self.assertEqual((monday['today'], monday['week_start'], monday['week_end']),
                          ('2026-10-12', '2026-10-11', '2026-11-07'))
+        self.assertEqual(monday['as_of'], '2026-10-12T00:00:00+09:00')
 
     def test_web_without_openpyxl_reads_using_existing_collector(self):
         original_import = builtins.__import__
@@ -116,6 +117,10 @@ import organizer.web
                          [('과목 A', 2, 4), ('과목 A', 5, 7), ('과목 B', 8, 8)])
         self.assertEqual(mixed[0]['start'], '10:10')
         self.assertEqual(mixed[-1]['start'], '17:00')
+        self.assertEqual([b['period_ends'] for b in mixed],
+                         [['11:00', '12:00', '13:00'], ['14:50', '15:50', '16:50'], ['17:50']])
+        self.assertEqual(sum(len(b['period_ends']) for day in data['days'].values()
+                             for b in day['lessons']), data['teaching_periods'])
         self.assertEqual(data['days']['2027-02-03']['lessons'][-1]['end'], '14:50')
         self.assertNotIn('공개하지 않을 강사', str(data))
 

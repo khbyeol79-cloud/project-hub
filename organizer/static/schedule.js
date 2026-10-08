@@ -1,5 +1,6 @@
 'use strict';
 let educationSchedule=null, scheduleLoading=false, scheduleSelectedDate=null, scheduleScope=null, scheduleCheckedToday=null;
+let scheduleReceivedAt=0;
 const scheduleWeekdays=['일','월','화','수','목','금','토'];
 function scheduleDate(key){return new Date(key+'T00:00:00Z');}
 function scheduleKey(date){return date.toISOString().slice(0,10);}
@@ -69,6 +70,34 @@ function renderScheduleWeeks(){
   $('schedule-weeks').append(card);
  }
 }
+function renderScheduleProgress(){
+ if(!educationSchedule)return;
+ const asOf=Date.parse(educationSchedule.as_of),now=Number.isFinite(asOf)?asOf+performance.now()-scheduleReceivedAt:Date.now();
+ const subjects=new Map();
+ Object.entries(educationSchedule.days).sort(([a],[b])=>a.localeCompare(b)).forEach(([key,day])=>{
+  day.lessons.forEach(block=>{
+   if(!subjects.has(block.subject))subjects.set(block.subject,{completed:0,total:0});
+   const subject=subjects.get(block.subject),hours=block.end_period-block.start_period+1;
+   subject.total+=hours;
+   // Each ended teaching period counts as one education hour, including 50-minute lessons.
+   subject.completed+=(block.period_ends||Array(hours).fill(block.end)).filter(end=>Date.parse(key+'T'+end+':00+09:00')<=now).length;
+  });
+ });
+ const body=$('schedule-subject-hours');body.replaceChildren();
+ let completed=0,total=0;
+ subjects.forEach((hours,name)=>{
+  completed+=hours.completed;total+=hours.total;
+  const row=node('tr'),subject=node('th',name),count=node('td'),remaining=node('td',(hours.total-hours.completed)+'시간');
+  subject.scope='row';
+  const progress=node('progress');progress.max=hours.total;progress.value=hours.completed;
+  progress.setAttribute('aria-label',name+' 교육시간 '+hours.completed+' / '+hours.total+'시간');
+  count.append(node('span',hours.completed+' / '+hours.total+'시간'),progress);
+  if(hours.completed===hours.total)subject.append(node('span','완료','schedule-subject-done'));
+  row.append(subject,count,remaining);body.append(row);
+ });
+ $('schedule-progress-total').textContent='전체 '+completed+' / '+total+'시간 · '+(total-completed)+'시간 남음';
+ $('schedule-progress-as-of').textContent=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date(now))+' 기준';
+}
 function selectScheduleDate(key,scroll=false){
  if(scroll)scheduleSelectedDate=key;
  document.querySelectorAll('[data-schedule-date]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.scheduleDate===key)));
@@ -108,14 +137,15 @@ function renderScheduleCalendar(){
 }
 function clearSchedule(){
  educationSchedule=null;scheduleSelectedDate=null;
- for(const id of ['schedule-course','schedule-meta','schedule-range','schedule-source','schedule-detail-title'])$(id).textContent='';
- for(const id of ['schedule-weeks','schedule-detail-body'])$(id).replaceChildren();
+ for(const id of ['schedule-course','schedule-meta','schedule-range','schedule-source','schedule-detail-title','schedule-progress-total','schedule-progress-as-of'])$(id).textContent='';
+ for(const id of ['schedule-weeks','schedule-detail-body','schedule-subject-hours'])$(id).replaceChildren();
  $('schedule-months').replaceChildren($('schedule-detail'));
  $('schedule-layout').hidden=true;
  $('schedule-detail').hidden=true;
 }
 async function loadSchedule(force=false){
  const scope=JSON.stringify(scopeParams()),version=scopeVersion;
+ if(scheduleScope===scope&&educationSchedule)renderScheduleProgress();
  if(!force&&scheduleScope===scope&&scheduleCheckedToday===scheduleKstToday())return;
  if(scheduleScope!==scope){clearSchedule();scheduleScope=scope;scheduleCheckedToday=null;}
  if(scheduleLoading)return;
@@ -126,11 +156,11 @@ async function loadSchedule(force=false){
   if(version!==scopeVersion)return;
   scheduleCheckedToday=d.available===false?scheduleKstToday():d.today;
   if(d.available===false){clearSchedule();$('schedule-status').textContent=d.notice;return;}
-  educationSchedule=d;
+  educationSchedule=d;scheduleReceivedAt=performance.now();
   $('schedule-course').textContent=d.course;
   $('schedule-meta').textContent=d.start.replaceAll('-','.')+' – '+d.end.replaceAll('-','.')+' · 총 '+d.teaching_days+'일 / '+d.teaching_periods+'교시';
   $('schedule-source').textContent='기준: '+d.source+' · 주말은 수업 없음 · 날짜를 누르면 시간표를 볼 수 있어요.';
-  $('schedule-layout').hidden=false;$('schedule-detail').hidden=false;renderScheduleWeeks();renderScheduleCalendar();
+  $('schedule-layout').hidden=false;$('schedule-detail').hidden=false;renderScheduleWeeks();renderScheduleCalendar();renderScheduleProgress();
   $('schedule-status').textContent=d.today<d.start?'훈련 시작 전입니다. 아래에서 전체 일정을 확인하세요.':d.today>d.end?'훈련이 종료되었습니다. 아래에서 전체 일정을 확인하세요.':'';
  }catch(e){if(version===scopeVersion)$('schedule-status').textContent='일정 불러오기 실패: '+e.message+(educationSchedule?' 기존 일정을 표시하고 있어요.':'');}
  finally{
