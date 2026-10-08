@@ -72,7 +72,7 @@ function renderScheduleWeeks(){
 }
 function renderScheduleProgress(){
  if(!educationSchedule)return;
- const asOf=Date.parse(educationSchedule.as_of),now=Number.isFinite(asOf)?asOf+performance.now()-scheduleReceivedAt:Date.now();
+ const asOf=Date.parse(educationSchedule.as_of),now=Number.isFinite(asOf)?asOf+Date.now()-scheduleReceivedAt:Date.now();
  const subjects=new Map();
  Object.entries(educationSchedule.days).sort(([a],[b])=>a.localeCompare(b)).forEach(([key,day])=>{
   day.lessons.forEach(block=>{
@@ -156,7 +156,7 @@ async function loadSchedule(force=false){
   if(version!==scopeVersion)return;
   scheduleCheckedToday=d.available===false?scheduleKstToday():d.today;
   if(d.available===false){clearSchedule();$('schedule-status').textContent=d.notice;return;}
-  educationSchedule=d;scheduleReceivedAt=performance.now();
+  educationSchedule=d;scheduleReceivedAt=Date.now();
   $('schedule-course').textContent=d.course;
   $('schedule-meta').textContent=d.start.replaceAll('-','.')+' – '+d.end.replaceAll('-','.')+' · 총 '+d.teaching_days+'일 / '+d.teaching_periods+'교시';
   $('schedule-source').textContent='기준: '+d.source+' · 주말은 수업 없음 · 날짜를 누르면 시간표를 볼 수 있어요.';
