@@ -25,7 +25,7 @@ from .conversations import Conversations
 from . import versions
 from bot import projects
 from .photos import Photos, PhotoError, photo_service
-from .schedule import schedule_snapshot, ScheduleError
+from .schedule import schedule_snapshot, configured_source, ScheduleError
 
 TEXT_PREVIEW_SUFFIXES = {'.md', '.markdown', '.txt', '.py', '.c', '.cpp', '.h', '.hpp', '.java',
                          '.js', '.ts', '.json', '.csv', '.yaml', '.yml', '.ini', '.cfg', '.css'}
@@ -44,6 +44,7 @@ def create_app(config=None, ai=None):
                       DOCUMENT_CACHE=None, MESSAGE_CHANNELS=(),
                       PHOTO_FOLDER_ID='', PHOTO_ROOT_ID='',
                       PHOTO_TOKEN=Path.home()/'.config/project-hub/photos-token.json',
+                      SCHEDULE_DIR=Path.home()/'.config/project-hub/schedule',
                       SHARE_URL_FILE=Path.home()/'.config/project-hub/library-share-url.txt',
                       SESSION_COOKIE_NAME='ph_library', SESSION_COOKIE_PATH='/library/',
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SECURE=True,
@@ -154,6 +155,13 @@ def create_app(config=None, ai=None):
     @app.get('/library/api/schedule')
     def education_schedule():
         scope = request_scope()
+        try:
+            source = configured_source(app.config['SCHEDULE_DIR'], scope)
+            if source:
+                name, path = source
+                return jsonify(schedule_snapshot(path, name))
+        except ScheduleError as exc:
+            return jsonify(error=str(exc)), 422
         with closing(connect()) as db:
             rows = db.execute("SELECT id, original_filename FROM files WHERE original_filename LIKE '%일정표%.xlsx' AND " +
                               projects.predicate(scope) + " ORDER BY julianday(uploaded_at) DESC, id DESC LIMIT 20").fetchall()

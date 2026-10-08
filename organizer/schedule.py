@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import os
 import re
+import hashlib
 import subprocess
 import sys
 from zipfile import ZipFile
@@ -13,6 +14,34 @@ from zoneinfo import ZoneInfo
 
 class ScheduleError(ValueError):
     pass
+
+
+def configured_source(directory, scope):
+    """Read only a scope's explicitly imported, immutable private workbook."""
+    if scope not in {'main', '1a', '1b'}:
+        raise ScheduleError('일정 자료 범위를 확인해 주세요.')
+    directory = Path(directory).resolve()
+    manifest = directory / (scope + '.json')
+    if not manifest.exists():
+        return None
+    try:
+        if manifest.is_symlink() or manifest.stat().st_size > 8192:
+            raise ValueError()
+        data = json.loads(manifest.read_text(encoding='utf-8'))
+        sha = data['sha256']
+        if not isinstance(sha, str) or not re.fullmatch(r'[a-f0-9]{64}', sha):
+            raise ValueError()
+        name = data['name']
+        if not isinstance(name, str) or not name or len(name) > 1000:
+            raise ValueError()
+        path = directory / (sha + '.xlsx')
+        if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError()
+        if hashlib.sha256(path.read_bytes()).hexdigest() != sha:
+            raise ValueError()
+        return name, path
+    except (OSError, ValueError, KeyError, TypeError):
+        raise ScheduleError('저장된 일정표를 확인해 주세요. Drive 일정 연결 명령을 다시 실행하세요.') from None
 
 
 def collector_python():

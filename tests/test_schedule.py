@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import builtins
+import hashlib
+import json
 import os
 import sqlite3
 import subprocess
@@ -158,3 +160,28 @@ import organizer.web
         with sqlite3.connect(db) as connection:
             connection.execute('UPDATE files SET local_path=? WHERE id=2', (str(self.root/'outside.xlsx'),))
         self.assertEqual(client.get('/library/api/schedule').status_code, 404)
+
+    def test_private_drive_source_works_without_a_discord_record_and_is_scoped(self):
+        folder = self.root/'private-schedule'
+        folder.mkdir()
+        data = self.path.read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        (folder/(sha+'.xlsx')).write_bytes(data)
+        manifest = folder/'main.json'
+        manifest.write_text(json.dumps({'sha256': sha, 'name': 'Drive 일정표.xlsx'}))
+        app = create_app({'TESTING': True, 'PUBLIC_ACCESS': True,
+                          'DB_PATH': self.root/'empty.db', 'STORAGE': self.storage,
+                          'SCHEDULE_DIR': folder})
+        client = app.test_client()
+        response = client.get('/library/api/schedule')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['source'], 'Drive 일정표.xlsx')
+        self.assertEqual(response.json['teaching_periods'], 12)
+        from organizer.schedule import configured_source
+        self.assertIsNone(configured_source(folder, '1a'))
+        self.assertIsNone(configured_source(folder, '1b'))
+        manifest.write_text(json.dumps({'sha256': '../outside', 'name': 'unsafe.xlsx'}))
+        self.assertEqual(client.get('/library/api/schedule').status_code, 422)
+        manifest.write_text(json.dumps({'sha256': sha, 'name': 'Drive 일정표.xlsx'}))
+        (folder/(sha+'.xlsx')).write_bytes(b'changed original')
+        self.assertEqual(client.get('/library/api/schedule').status_code, 422)
