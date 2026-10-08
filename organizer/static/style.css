@@ -105,8 +105,8 @@
 .schedule-day.is-weekend{background:#fafbf8}
 .schedule-day.is-today{background:#f1f7e9;box-shadow:inset 0 3px var(--green)}
 .schedule-day:has([aria-pressed=true]){background:#edf4e7}
-.schedule-day-heading{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px;align-items:center;margin-bottom:9px}
-.schedule-day-room{min-width:0;font-size:10px;color:var(--green);line-height:1.5;overflow-wrap:anywhere}
+.schedule-day-heading{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:4px;align-items:start;margin-bottom:9px}
+.schedule-day-room{min-width:0;font-size:10px;color:var(--green);line-height:1.5;padding-top:6px;overflow-wrap:anywhere}
 .schedule-day-select{border:1px solid transparent;border-radius:6px;background:transparent;color:var(--ink);font-size:13px;font-weight:750;min-height:30px;padding:2px 1px;font-variant-numeric:tabular-nums}
 .schedule-day-select:hover{border-color:var(--green)}
 .schedule-day-select[aria-pressed=true]{background:var(--green);color:white}

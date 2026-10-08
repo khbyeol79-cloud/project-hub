@@ -12,8 +12,7 @@ function scheduleKstToday(){
 }
 function scheduleHours(day){return (day?.lessons||[]).reduce((n,b)=>n+b.end_period-b.start_period+1,0);}
 function scheduleRoomLabel(room){
- const number=room.match(/^[（(](\d+)[）)]/);
- return number?number[1]+'호':room;
+ return room.replace(/^\s*[（(]\d+[）)]\s*/,'').trim()||room;
 }
 function scheduleNoClass(key,day){
  if(key<educationSchedule.start)return '훈련 시작 전';
@@ -81,10 +80,12 @@ function selectScheduleDate(key,scroll=false){
 function renderScheduleCalendar(){
  const d=educationSchedule,start=scheduleDate(d.start),end=scheduleDate(d.end);
  $('schedule-months').replaceChildren($('schedule-detail'));
+ const months=[];
  for(let year=start.getUTCFullYear(),month=start.getUTCMonth();year<end.getUTCFullYear()||(year===end.getUTCFullYear()&&month<=end.getUTCMonth());month++){
   if(month===12){year++;month=0;}
   const card=node('section',undefined,'schedule-month'),first=new Date(Date.UTC(year,month,1)),last=new Date(Date.UTC(year,month+1,0));
   const prefix=scheduleKey(first).slice(0,7),days=Object.entries(d.days).filter(([key,day])=>key.startsWith(prefix)&&day.lessons.length);
+  card.dataset.scheduleMonth=prefix;
   card.append(node('h4',(month+1)+'월'),node('p',days.length+'일 · '+days.reduce((n,[,day])=>n+scheduleHours(day),0)+'교시','schedule-month-total'));
   const grid=node('div',undefined,'schedule-calendar-grid');
   scheduleWeekdays.forEach(label=>grid.append(node('span',label,'schedule-weekday')));
@@ -98,8 +99,10 @@ function renderScheduleCalendar(){
    if(!outside)button.onclick=()=>selectScheduleDate(key,true);
    grid.append(button);
   }
-  card.append(grid);$('schedule-months').append(card);
+  card.append(grid);months.push(card);
  }
+ const current=months.findIndex(card=>card.dataset.scheduleMonth===d.today.slice(0,7));
+ $('schedule-months').append(...(current<0?months:months.slice(current).concat(months.slice(0,current))));
  const today=d.today<d.start?d.start:d.today>d.end?d.end:d.today;
  selectScheduleDate(scheduleSelectedDate||today);
 }
