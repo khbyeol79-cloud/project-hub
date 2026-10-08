@@ -91,4 +91,5 @@ Windows에서는 `.\.venv\Scripts\python.exe -m bot.status`를 사용합니다. 
 ## Drive 사진 갤러리
 
 자료실 상단 **사진** 메뉴에서 `Project Hub/사진`을 확인합니다.
-별도 읽기 전용 인증과 웹 의존성 설치/배포 절차는 [organizer/PHOTOS.md](organizer/PHOTOS.md)를 따르세요.
+`사진공유` Discord 채널의 기존·새 사진도 동일 폴더로 자동 수집하도록 연결했습니다.
+사진 인증과 웹 의존성 설치/배포 절차는 [organizer/PHOTOS.md](organizer/PHOTOS.md)를 따르세요.

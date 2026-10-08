@@ -1,5 +1,7 @@
 from pathlib import Path
 import hashlib
+import os
+import re
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -17,6 +19,8 @@ TOKEN_PATH = BASE_DIR / "token.json"
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file"
 ]
+PHOTO_READ_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
+PHOTO_UPLOAD_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 
 
 CATEGORY_FOLDERS = {
@@ -27,6 +31,7 @@ CATEGORY_FOLDERS = {
     "meeting": "게시물",
     "robot_1a": "추가 프로젝트 - 1팀",
     "robot_1b": "추가 프로젝트 - 2팀",
+    "photos": "사진",
 }
 
 ROOT_FOLDER_NAME = "Project Hub"
@@ -34,6 +39,41 @@ ROOT_FOLDER_NAME = "Project Hub"
 
 class AuthorizationRequired(RuntimeError):
     """Background upload needs interactive authorization on the user's PC."""
+
+
+def get_photo_upload_service():
+    """Prefer a separate photo token; existing bot auth remains available as fallback."""
+    path = Path(os.environ.get('PROJECT_HUB_PHOTO_TOKEN',
+                str(Path.home()/'.config/project-hub/photos-token.json'))).expanduser()
+    if not path.is_file():
+        return get_drive_service(interactive=False)
+    creds = Credentials.from_authorized_user_file(path)
+    if not creds.has_scopes([PHOTO_READ_SCOPE, PHOTO_UPLOAD_SCOPE]):
+        raise AuthorizationRequired('Photo token needs read access and per-file upload permission; authorize organizer.photos --upload locally')
+    if not creds.valid:
+        if not creds.refresh_token:
+            raise AuthorizationRequired('Photo Google OAuth login required')
+        creds.refresh(Request())
+    return build('drive', 'v3', credentials=creds, cache_discovery=False)
+
+
+def photo_upload_folder(service):
+    """Validate the configured existing folder; never create a second Photos folder."""
+    folder_id = os.environ.get('PROJECT_HUB_PHOTO_FOLDER_ID', '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', folder_id):
+        raise ValueError('Configure PROJECT_HUB_PHOTO_FOLDER_ID with the existing photo folder ID')
+    try:
+        folder = service.files().get(fileId=folder_id,
+            fields='mimeType,trashed,capabilities(canAddChildren)', supportsAllDrives=True).execute()
+    except HttpError as exc:
+        if exc.resp.status in {403, 404}:
+            raise AuthorizationRequired('Existing photo folder is not accessible; check photo authentication and folder permission') from None
+        raise
+    if folder.get('trashed') or folder.get('mimeType') != 'application/vnd.google-apps.folder':
+        raise ValueError('Photo destination must be an existing non-trashed Drive folder')
+    if not folder.get('capabilities', {}).get('canAddChildren'):
+        raise AuthorizationRequired('Google account cannot add photos to the configured folder')
+    return folder_id
 
 
 def get_drive_service(interactive=True):
@@ -161,6 +201,9 @@ def prepare_drive_folders(
 
     for category, folder_name in CATEGORY_FOLDERS.items():
 
+        if category == 'photos':
+            continue  # Manual folder is resolved by explicit ID during photo uploads only.
+
         folder_id = get_or_create_folder(
             service,
             folder_name,
@@ -202,13 +245,8 @@ def upload_file(
             f"알 수 없는 카테고리입니다: {category}"
         )
 
-    folder_ids = prepare_drive_folders(
-        service
-    )
-
-    target_folder_id = folder_ids[
-        category
-    ]
+    target_folder_id = (photo_upload_folder(service) if category == 'photos'
+                        else prepare_drive_folders(service)[category])
 
     if drive_filename is None:
         drive_filename = file_path.name
@@ -234,7 +272,7 @@ def upload_file(
         uploaded = service.files().create(
             body=metadata,
             media_body=media,
-            fields="id, name, webViewLink"
+            fields="id, name, webViewLink", supportsAllDrives=True
         ).execute()
     except HttpError as exc:
         if exc.resp.status != 409 or not file_id:
@@ -262,7 +300,7 @@ def generate_file_id(service):
 def find_uploaded_file(service, file_id, expected_sha256=None):
     try:
         item = service.files().get(
-            fileId=file_id, fields="id,name,webViewLink,trashed,appProperties"
+            fileId=file_id, fields="id,name,webViewLink,trashed,appProperties", supportsAllDrives=True
         ).execute()
     except HttpError as exc:
         if exc.resp.status == 404:

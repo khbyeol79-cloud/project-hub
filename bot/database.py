@@ -326,7 +326,9 @@ def initialize_channel_cursor(channel_id, fallback_id):
         latest = conn.execute("""SELECT MAX(CAST(discord_message_id AS INTEGER))
             FROM files WHERE discord_channel_id = ?""", (str(channel_id),)).fetchone()[0]
         # Include the last stored message: it may contain a partially saved batch.
-        initial = max(0, latest - 1) if latest else int(fallback_id)
+        # Zero explicitly requests a first import from the beginning (photos/threads).
+        # INSERT OR IGNORE keeps any previously saved checkpoint unchanged.
+        initial = 0 if int(fallback_id) == 0 else (max(0, latest - 1) if latest else int(fallback_id))
         conn.execute("INSERT OR IGNORE INTO channel_cursors(channel_id, last_message_id) VALUES (?, ?)",
                      (str(channel_id), str(initial)))
 

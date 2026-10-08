@@ -146,12 +146,16 @@ class Photos:
 def main():
     import argparse
     import os
-    parser = argparse.ArgumentParser(description='Authorize a separate read-only Drive gallery token locally; never replace bot token.json.')
+    parser = argparse.ArgumentParser(description='Authorize a separate Drive photo token locally; never replace bot token.json.')
     parser.add_argument('--credentials', type=Path, required=True)
     parser.add_argument('--token', type=Path, default=Path.home()/'.config/project-hub/photos-token.json')
+    parser.add_argument('--upload', action='store_true', help='Also allow new Discord photo uploads using drive.file, without full Drive write access')
     args = parser.parse_args()
     # Google consent covers Drive read access; the app only serves configured photo folders.
-    flow = InstalledAppFlow.from_client_secrets_file(args.credentials, [READ_SCOPE])
+    scopes = [READ_SCOPE]
+    if args.upload:
+        scopes.append('https://www.googleapis.com/auth/drive.file')
+    flow = InstalledAppFlow.from_client_secrets_file(args.credentials, scopes)
     creds = flow.run_local_server(port=0)
     args.token.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(args.token, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -159,7 +163,7 @@ def main():
         stream.write(creds.to_json())
     if os.name == 'posix':
         args.token.chmod(0o600)
-    print('사진 읽기 전용 인증 완료. 토큰은 개인 서버에만 보관하세요.')
+    print('사진 연결 인증 완료. 토큰은 개인 서버에만 보관하세요.')
 
 
 if __name__ == '__main__':

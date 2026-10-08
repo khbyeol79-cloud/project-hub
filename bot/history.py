@@ -15,7 +15,7 @@ logger = logging.getLogger("project-hub")
 
 class HistoryCollector:
     def __init__(self, client, channel_ids, process_message, *, forums=None, batch_size=100, interval=60,
-                 cursor_store=database, health_prefix='history:'):
+                 cursor_store=database, health_prefix='history:', full_history_channels=()):
         self.client = client
         self.channel_ids = tuple(str(value) for value in channel_ids)
         self.forum_ids = tuple(str(value) for value in (forums or {}))
@@ -24,13 +24,14 @@ class HistoryCollector:
         self.interval = interval
         self.cursors = cursor_store
         self.health_prefix = health_prefix
+        self.full_history_channels = {str(cid) for cid in full_history_channels}
         self.wakeup = asyncio.Event()
 
     def initialize(self, now=None):
         now = now or datetime.now(timezone.utc)
         fallback = discord.utils.time_snowflake(now - timedelta(hours=24))
         for channel_id in self.channel_ids:
-            self.cursors.initialize_channel_cursor(channel_id, fallback)
+            self.cursors.initialize_channel_cursor(channel_id, 0 if channel_id in self.full_history_channels else fallback)
 
     async def scan_channel(self, channel_id, *, channel=None, report_health=True):
         cursor = self.cursors.get_channel_cursor(channel_id)

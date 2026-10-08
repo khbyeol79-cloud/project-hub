@@ -13,7 +13,7 @@ import discord
 from dotenv import load_dotenv
 
 if __package__:
-    from . import database, projects
+    from . import database, projects, photo_channels
     from .drive import CATEGORY_FOLDERS
     from .upload_queue import UploadWorker, write_metadata
     from .history import HistoryCollector
@@ -22,7 +22,7 @@ if __package__:
     from .content_search import ContentIndexer, initialize as initialize_content
     from . import message_archive
 else:
-    import database, projects
+    import database, projects, photo_channels
     from drive import CATEGORY_FOLDERS
     from upload_queue import UploadWorker, write_metadata
     from history import HistoryCollector
@@ -102,7 +102,8 @@ class CollectorClient(discord.Client):
         alert_channel = os.getenv("DISCORD_ALERT_CHANNEL_ID", "").strip()
         if alert_channel and (not alert_channel.isascii() or not alert_channel.isdecimal() or int(alert_channel) <= 0):
             raise ValueError("DISCORD_ALERT_CHANNEL_ID must be a positive channel ID or empty")
-        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message, forums=FORUM_MAP)
+        self.history_collector = HistoryCollector(self, CHANNEL_MAP, process_message, forums=FORUM_MAP,
+            full_history_channels=[cid for cid, category in CHANNEL_MAP.items() if category == photo_channels.CATEGORY])
         self.history_collector.initialize()
         self.retry_task = asyncio.create_task(retry_uploads())
         self.history_task = asyncio.create_task(self.history_collector.run())
@@ -158,22 +159,32 @@ async def connect_project_channels():
     if guild is None:
         return
     resolved = projects.discover(guild.text_channels)
+    photos = photo_channels.discover(guild.text_channels)
     with closing(database.get_connection()) as db:
         saved = projects.stored_channels(db)
     current = {str(c.id) for c in guild.text_channels}
     resolved.update({cid: category for cid, category in saved.items() if cid in current})
+    # Never override an established A/B team or configured channel with a name match.
+    photos = {cid: category for cid, category in photos.items()
+              if CHANNEL_MAP.get(cid, category) == category and cid not in resolved}
+    resolved.update(photos)
     CHANNEL_MAP.update(resolved)
     for collector in (client.history_collector, client.message_collector):
         if collector:
             collector.channel_ids = tuple(CHANNEL_MAP)
             collector.forum_ids = tuple(dict.fromkeys([*FORUM_MAP, *resolved]))
+            if collector is client.history_collector:
+                collector.full_history_channels = {cid for cid, category in CHANNEL_MAP.items()
+                                                    if category == photo_channels.CATEGORY}
             collector.initialize()
             collector.wakeup.set()
     if client.message_archive:
         client.message_archive.channels.update(CHANNEL_MAP)
     if client.health_monitor:
         client.health_monitor.channel_map.update(CHANNEL_MAP)
-    logger.info('PROJECT_CHANNELS_READY | teams=%d', len(resolved))
+    logger.info('PROJECT_CHANNELS_READY | teams=%d | photo_channels=%d',
+                sum(category in projects.TEAM_CATEGORIES.values() for category in resolved.values()),
+                sum(category == photo_channels.CATEGORY for category in CHANNEL_MAP.values()))
 
 
 @client.event
@@ -271,6 +282,8 @@ async def process_message(message, *, upload=True):
         return True
     complete = True
     for index, attachment in enumerate(message.attachments, start=1):
+        if category == photo_channels.CATEGORY and not photo_channels.is_photo(attachment):
+            continue
         try:
             async with collection_lock:
                 if parent_id in FORUM_MAP or parent_id in CHANNEL_MAP:
@@ -328,6 +341,8 @@ async def on_raw_bulk_message_delete(payload):
 def main():
     global CHANNEL_MAP, FORUM_MAP, drive_executor, upload_worker
     load_dotenv(BASE_DIR / ".env")
+    # Use the exact same photo-folder configuration as the web gallery.
+    load_dotenv(Path.home()/'.config/project-hub/library.env', override=False)
     token = os.getenv("DISCORD_BOT_TOKEN")
     if not token:
         raise RuntimeError("DISCORD_BOT_TOKEN을 환경변수 또는 로컬 .env에 설정하세요.")

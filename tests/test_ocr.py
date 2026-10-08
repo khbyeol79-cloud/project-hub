@@ -228,9 +228,17 @@ class OCRProcessCleanupTests(fixtures.ContentFixture, unittest.IsolatedAsyncioTe
         spawn = asyncio.create_subprocess_exec
         for cancel in (False, True):
             marker = self.storage / ('child-' + str(cancel))
+            heartbeat = self.storage / ('heartbeat-' + str(cancel))
+            child_code = ('import pathlib,time; '
+                          f'p=pathlib.Path({str(heartbeat)!r}); '
+                          'deadline=time.monotonic()+60\n'
+                          'while time.monotonic()<deadline:\n'
+                          ' p.write_text(str(time.monotonic_ns())); time.sleep(0.01)\n')
             script = ('import sys,json,subprocess,pathlib,time; '
                       'job=json.load(sys.stdin); '
-                      'child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"]); '
+                      f'child=subprocess.Popen([sys.executable,"-c",{child_code!r}]); '
+                      f'heartbeat=pathlib.Path({str(heartbeat)!r})\n'
+                      'while not heartbeat.exists(): time.sleep(0.01)\n'
                       f'pathlib.Path({str(marker)!r}).write_text(json.dumps([child.pid,job["scratch"]])); '
                       'time.sleep(60)')
             async def replacement(*args, **kwargs):
@@ -242,7 +250,7 @@ class OCRProcessCleanupTests(fixtures.ContentFixture, unittest.IsolatedAsyncioTe
                 while not marker.exists() and time.monotonic() < deadline:
                     await asyncio.sleep(0.01)
                 self.assertTrue(marker.exists())
-                pid, scratch = json.loads(marker.read_text())
+                _, scratch = json.loads(marker.read_text())
                 if cancel:
                     task.cancel()
                     with self.assertRaises(asyncio.CancelledError):
@@ -250,6 +258,9 @@ class OCRProcessCleanupTests(fixtures.ContentFixture, unittest.IsolatedAsyncioTe
                 else:
                     self.assertEqual((await task)['status'], 'failed')
             self.assertFalse(Path(scratch).exists())
-            status = Path('/proc') / str(pid) / 'stat'
-            if status.exists():
-                self.assertEqual(status.read_text().split()[2], 'Z', 'OCR descendant still running')
+            # In a managed PID namespace /proc/<reported pid> can refer to an
+            # unrelated host process. Check this actual child's activity instead.
+            await asyncio.sleep(0.05)
+            stopped = heartbeat.read_text()
+            await asyncio.sleep(0.15)
+            self.assertEqual(heartbeat.read_text(), stopped, 'OCR descendant still running')

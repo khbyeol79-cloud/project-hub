@@ -90,10 +90,10 @@ def option_scope(interaction):
 
 
 def stored_channels(db):
-    """Reuse collected channel IDs after a rename, without a schema migration."""
-    found = dict(db.execute("SELECT DISTINCT discord_channel_id,category FROM files WHERE discord_guild_id=? AND category IN ('robot_1a','robot_1b')", (GUILD_ID,)))
+    """Reuse team and photo channel IDs after a rename, without a schema migration."""
+    found = dict(db.execute("SELECT DISTINCT discord_channel_id,category FROM files WHERE discord_guild_id=? AND category IN ('robot_1a','robot_1b','photos')", (GUILD_ID,)))
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='conversation_messages'").fetchone():
-        found.update(db.execute("SELECT DISTINCT channel_id,category FROM conversation_messages WHERE guild_id=? AND category IN ('robot_1a','robot_1b')", (GUILD_ID,)))
+        found.update(db.execute("SELECT DISTINCT channel_id,category FROM conversation_messages WHERE guild_id=? AND category IN ('robot_1a','robot_1b','photos')", (GUILD_ID,)))
     return found
 
 

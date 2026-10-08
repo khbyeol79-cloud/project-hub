@@ -27,11 +27,15 @@ def write_metadata(row):
 class UploadWorker:
     def __init__(self):
         self.service = None
+        self.photo_service = None
 
     def close(self):
         if self.service is not None:
             self.service.close()
             self.service = None
+        if self.photo_service is not None:
+            self.photo_service.close()
+            self.photo_service = None
 
     def upload(self, file_id):
         row = database.get_file(file_id)
@@ -41,13 +45,19 @@ class UploadWorker:
             return
         database.mark_upload_attempt(file_id)
         try:
-            if self.service is None:
-                self.service = drive.get_drive_service(interactive=False)
+            if row['category'] == 'photos':
+                if self.photo_service is None:
+                    self.photo_service = drive.get_photo_upload_service()
+                service = self.photo_service
+            else:
+                if self.service is None:
+                    self.service = drive.get_drive_service(interactive=False)
+                service = self.service
             planned_id = row["planned_drive_id"]
             if not planned_id:
-                planned_id = database.reserve_drive_id(file_id, drive.generate_file_id(self.service))
+                planned_id = database.reserve_drive_id(file_id, drive.generate_file_id(service))
             result = drive.upload_file(
-                self.service, row["local_path"], row["category"], row["original_filename"],
+                service, row["local_path"], row["category"], row["original_filename"],
                 file_id=planned_id, expected_sha256=row["sha256"],
             )
             database.update_drive_info(file_id, result["file_id"], result["url"])
