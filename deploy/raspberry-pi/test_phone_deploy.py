@@ -26,7 +26,8 @@ class DeploymentTests(unittest.TestCase):
             self.assertTrue(deploy.allowed(name), name)
         for name in ['.env', 'credentials.json', 'token.json', 'config/channels.json',
                      'storage/file.py', 'bot/../.env', '/bot/x.py', 'bot\\x.py',
-                     'organizer/static/key.json', 'bot/.venv/test.py']:
+                     'organizer/static/key.json', 'bot/.venv/test.py',
+                     'organizer/monitor_usage.py']:
             self.assertFalse(deploy.allowed(name), name)
 
     def test_rollback_restores_old_removes_new_and_preserves_data(self):
@@ -68,6 +69,74 @@ class DeploymentTests(unittest.TestCase):
                 self.skipTest('Symlinks unavailable for this user')
             with self.assertRaises(ValueError):
                 deploy.safe_path(root, 'bot/external.py')
+
+    @unittest.skipUnless(os.name == 'posix', 'Pi deployment transaction')
+    def test_monitor_integration_is_preserved_during_apply_and_rollback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            root, checkout = home / 'live', home / 'checkout'
+            for base, content in [(root, 'old'), (checkout, 'new')]:
+                for name in ['bot/discord_bot.py', 'organizer/web.py', 'organizer/monitor_usage.py']:
+                    path = base / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+            integration = root / 'organizer/monitor_usage.py'
+            integration.write_text('local monitoring integration')
+            def fake_run(*args, **kwargs):
+                if args[:2] == ('git', 'rev-parse'):
+                    return 'a' * 40
+                if args[:2] == ('git', 'status'):
+                    return ''
+                if args[:2] == ('git', 'ls-files'):
+                    return 'bot/discord_bot.py\0organizer/web.py\0organizer/monitor_usage.py\0'
+                return ''
+            with patch.object(deploy, '__file__', str(checkout / 'deploy/raspberry-pi/phone_deploy.py')), \
+                 patch.object(deploy.os, 'geteuid', return_value=1000), \
+                 patch.object(Path, 'home', return_value=home), \
+                 patch.object(deploy, 'run', side_effect=fake_run), \
+                 patch.object(deploy, 'healthy'), \
+                 patch.object(deploy.sys, 'argv', ['phone_deploy', '--root', str(root), '--apply']):
+                deploy.main()
+            self.assertEqual((root / 'organizer/web.py').read_text(), 'new')
+            self.assertEqual(integration.read_text(), 'local monitoring integration')
+            import json
+            current = json.loads((home / '.local/state/project-hub-deploy/current.json').read_text())
+            backup = Path(current['backup'])
+            manifest = json.loads((backup / 'manifest.json').read_text())
+            self.assertNotIn('organizer/monitor_usage.py', manifest['files'])
+            deploy.restore(root, backup, manifest)
+            self.assertEqual((root / 'organizer/web.py').read_text(), 'old')
+            self.assertEqual(integration.read_text(), 'local monitoring integration')
+
+    @unittest.skipUnless(os.name == 'posix', 'Pi deployment transaction')
+    def test_other_missing_application_modules_still_require_a_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            root, checkout = home / 'live', home / 'checkout'
+            for base in (root, checkout):
+                for name in ['bot/discord_bot.py', 'organizer/web.py']:
+                    path = base / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('code')
+            (root / 'organizer/other_module.py').write_text('must review deletion')
+            def fake_run(*args, **kwargs):
+                if args[:2] == ('git', 'rev-parse'):
+                    return 'a' * 40
+                if args[:2] == ('git', 'status'):
+                    return ''
+                if args[:2] == ('git', 'ls-files'):
+                    return 'bot/discord_bot.py\0organizer/web.py\0'
+                return ''
+            with patch.object(deploy, '__file__', str(checkout / 'deploy/raspberry-pi/phone_deploy.py')), \
+                 patch.object(deploy.os, 'geteuid', return_value=1000), \
+                 patch.object(Path, 'home', return_value=home), \
+                 patch.object(deploy, 'run', side_effect=fake_run) as calls, \
+                 patch.object(deploy.sys, 'argv', ['phone_deploy', '--root', str(root), '--apply']):
+                with self.assertRaises(SystemExit) as error:
+                    deploy.main()
+            self.assertEqual(error.exception.code, 2)
+            self.assertFalse(any(call.args and call.args[0] == 'sudo' for call in calls.call_args_list))
+            self.assertTrue((root / 'organizer/other_module.py').exists())
 
     @unittest.skipUnless(os.name == 'posix', 'Pi deployment transaction')
     def test_failed_health_or_stop_recovers_without_losing_configuration(self):

@@ -13,6 +13,9 @@ import time
 import urllib.request
 
 SERVICES = ['project-hub.service', 'project-hub-library.service']
+# Installed and maintained separately by the Pi server monitoring project.
+# This repository must neither replace it nor classify it as deleted app code.
+LOCAL_INTEGRATIONS = {'organizer/monitor_usage.py'}
 
 
 def run(*args, cwd=None, capture=False):
@@ -33,7 +36,7 @@ def same_code(left, right):
 
 def allowed(name):
     p = Path(name)
-    if p.is_absolute() or '..' in p.parts or '\\' in name:
+    if name in LOCAL_INTEGRATIONS or p.is_absolute() or '..' in p.parts or '\\' in name:
         return False
     return ((len(p.parts) == 2 and p.parts[0] in {'bot', 'organizer'} and p.suffix == '.py')
             or (len(p.parts) == 3 and p.parts[:2] == ('organizer', 'static')
@@ -148,6 +151,9 @@ def main():
         changed = [name for name in names if not same_code(root / name, checkout / name)]
         print('Commit:', sha)
         print('Code changes:', ', '.join(changed) or '(none)')
+        preserved = sorted(name for name in LOCAL_INTEGRATIONS if (root / name).is_file())
+        if preserved:
+            print('Preserved local integration:', ', '.join(preserved))
         # Tests run in the credential-free checkout with its own Python 3.11 environment.
         run('bash', 'scripts/check.sh', cwd=checkout)
         # Check target environments without installing or upgrading production packages.
