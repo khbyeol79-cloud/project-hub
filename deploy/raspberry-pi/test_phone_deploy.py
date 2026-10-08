@@ -12,6 +12,38 @@ spec.loader.exec_module(deploy)
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_web_import_failure_stops_before_live_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            root, checkout = home / 'live', home / 'checkout'
+            for base, content in [(root, 'old'), (checkout, 'new')]:
+                for name in ['bot/discord_bot.py', 'organizer/web.py']:
+                    path = base / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+
+            def fake_run(*args, **kwargs):
+                if args[:2] == ('git', 'rev-parse'):
+                    return 'a' * 40
+                if args[:2] == ('git', 'status'):
+                    return ''
+                if args[:2] == ('git', 'ls-files'):
+                    return 'bot/discord_bot.py\0organizer/web.py\0'
+                if args[1:] == ('-c', 'import organizer.web'):
+                    self.assertEqual(kwargs['cwd'], checkout)
+                    raise RuntimeError('Candidate cannot import in web venv')
+                return ''
+
+            with patch.object(deploy, '__file__', str(checkout / 'deploy/raspberry-pi/phone_deploy.py')), \
+                 patch.object(deploy.os, 'geteuid', return_value=1000), \
+                 patch.object(Path, 'home', return_value=home), \
+                 patch.object(deploy, 'run', side_effect=fake_run) as calls, \
+                 patch.object(deploy.sys, 'argv', ['phone_deploy', '--root', str(root), '--apply']):
+                with self.assertRaisesRegex(RuntimeError, 'web venv'):
+                    deploy.main()
+            self.assertFalse(any(call.args and call.args[0] == 'sudo' for call in calls.call_args_list))
+            self.assertEqual((root / 'organizer/web.py').read_text(), 'old')
+
     def test_line_endings_do_not_trigger_code_deployment(self):
         with tempfile.TemporaryDirectory() as tmp:
             a, b = Path(tmp) / 'a.py', Path(tmp) / 'b.py'

@@ -168,6 +168,9 @@ def main():
                  '"Production dependencies differ; prepare an explicit dependency upgrade"')
         for python, requirement in checks:
             run(str(python), '-c', check, str(checkout / requirement))
+        # Tests use a richer development venv. Import the candidate web application
+        # with the actual web interpreter before stopping or replacing live services.
+        run(str(checks[1][0]), '-c', 'import organizer.web', cwd=checkout)
         if not args.apply:
             print('Checks passed. No live files changed. Add --apply to deploy this commit.')
             return

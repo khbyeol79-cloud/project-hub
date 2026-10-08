@@ -3,18 +3,48 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+import json
+import os
 import re
+import subprocess
+import sys
 from zipfile import ZipFile
 from zoneinfo import ZoneInfo
-
-import openpyxl
-
 
 class ScheduleError(ValueError):
     pass
 
 
+def collector_python():
+    return Path(__file__).resolve().parent.parent / 'deploy/raspberry-pi/.venv/bin/python'
+
+
+def read_in_collector(path):
+    """The existing collector environment owns openpyxl; the web venv does not."""
+    python = collector_python()
+    if not python.is_file():
+        raise ScheduleError('일정표 변환용 수집기 Python 환경을 확인해 주세요.')
+    env = {k: v for k, v in os.environ.items()
+           if k.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'TEMP', 'TMP', 'LANG', 'LC_ALL'}}
+    try:
+        result = subprocess.run([str(python), '-I', str(Path(__file__).resolve())],
+                                input=json.dumps({'path': str(Path(path).resolve())}),
+                                text=True, capture_output=True, timeout=15, env=env, check=True)
+        data = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise ScheduleError('일정표를 변환하지 못했습니다. 원본 엑셀을 확인해 주세요.') from None
+    if 'error' in data:
+        raise ScheduleError(data['error'])
+    return data
+
+
 def parse_schedule(path):
+    try:
+        import openpyxl
+    except ModuleNotFoundError as exc:
+        if exc.name != 'openpyxl':
+            raise
+        return read_in_collector(path)
     path = Path(path)
     if path.stat().st_size > 8 * 1024 * 1024:
         raise ScheduleError('일정표 파일이 너무 큽니다.')
@@ -101,3 +131,13 @@ def schedule_snapshot(path, source, now=None):
     data.update(source=source, available=True, timezone='Asia/Seoul', today=today.isoformat(),
                 week_start=monday.isoformat(), week_end=(monday+timedelta(days=20)).isoformat())
     return data
+
+
+if __name__ == '__main__':
+    job = json.load(sys.stdin)
+    try:
+        # Fail rather than recursively spawning another worker if the collector is incomplete.
+        import openpyxl
+        print(json.dumps(parse_schedule(job['path']), ensure_ascii=False))
+    except ScheduleError as exc:
+        print(json.dumps({'error': str(exc)}, ensure_ascii=False))

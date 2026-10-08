@@ -1,8 +1,13 @@
 from datetime import datetime, timezone
 from pathlib import Path
+import builtins
+import os
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -58,6 +63,39 @@ class ScheduleTests(unittest.TestCase):
                          ('2026-10-11', '2026-10-05', '2026-10-25'))
         self.assertEqual((monday['today'], monday['week_start'], monday['week_end']),
                          ('2026-10-12', '2026-10-12', '2026-11-01'))
+
+    def test_web_without_openpyxl_reads_using_existing_collector(self):
+        original_import = builtins.__import__
+
+        def web_import(name, *args, **kwargs):
+            if name == 'openpyxl':
+                raise ModuleNotFoundError("No module named 'openpyxl'", name='openpyxl')
+            return original_import(name, *args, **kwargs)
+
+        with patch('builtins.__import__', side_effect=web_import), \
+             patch('organizer.schedule.collector_python', return_value=Path(sys.executable)), \
+             patch.dict(os.environ, {'DISCORD_BOT_TOKEN': 'test-only-must-not-inherit'}), \
+             patch('organizer.schedule.subprocess.run', wraps=subprocess.run) as worker:
+            data = parse_schedule(self.path)
+        self.assertEqual(data['teaching_periods'], 12)
+        self.assertEqual(data['days']['2027-02-02']['note'], '휴강')
+        self.assertNotIn('DISCORD_BOT_TOKEN', worker.call_args.kwargs['env'])
+        self.assertIn('-I', worker.call_args.args[0])
+
+    def test_fresh_web_import_does_not_require_collector_only_packages(self):
+        script = '''import builtins
+original = builtins.__import__
+def web_import(name, *args, **kwargs):
+    if name == 'openpyxl':
+        raise ModuleNotFoundError("No module named 'openpyxl'", name='openpyxl')
+    return original(name, *args, **kwargs)
+builtins.__import__ = web_import
+import organizer.web
+'''
+        result = subprocess.run([sys.executable, '-c', script],
+                                cwd=Path(__file__).resolve().parents[1],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_window_keeps_rolling_across_year(self):
         data = self.snapshot(datetime(2026, 12, 31, tzinfo=timezone.utc))
