@@ -58,13 +58,16 @@ class ScheduleTests(unittest.TestCase):
     def snapshot(self, now):
         return schedule_snapshot(self.path, '샘플 일정표.xlsx', now)
 
-    def test_window_moves_at_korean_monday_midnight(self):
-        sunday = self.snapshot(datetime(2026, 10, 11, 14, 59, tzinfo=timezone.utc))
+    def test_window_moves_at_korean_sunday_midnight(self):
+        saturday = self.snapshot(datetime(2026, 10, 10, 14, 59, tzinfo=timezone.utc))
+        sunday = self.snapshot(datetime(2026, 10, 10, 15, 0, tzinfo=timezone.utc))
         monday = self.snapshot(datetime(2026, 10, 11, 15, 0, tzinfo=timezone.utc))
+        self.assertEqual((saturday['today'], saturday['week_start'], saturday['week_end']),
+                         ('2026-10-10', '2026-10-04', '2026-10-31'))
         self.assertEqual((sunday['today'], sunday['week_start'], sunday['week_end']),
-                         ('2026-10-11', '2026-10-05', '2026-11-01'))
+                         ('2026-10-11', '2026-10-11', '2026-11-07'))
         self.assertEqual((monday['today'], monday['week_start'], monday['week_end']),
-                         ('2026-10-12', '2026-10-12', '2026-11-08'))
+                         ('2026-10-12', '2026-10-11', '2026-11-07'))
 
     def test_web_without_openpyxl_reads_using_existing_collector(self):
         original_import = builtins.__import__
@@ -101,7 +104,7 @@ import organizer.web
 
     def test_window_keeps_rolling_across_year(self):
         data = self.snapshot(datetime(2026, 12, 31, tzinfo=timezone.utc))
-        self.assertEqual((data['week_start'], data['week_end']), ('2026-12-28', '2027-01-24'))
+        self.assertEqual((data['week_start'], data['week_end']), ('2026-12-27', '2027-01-23'))
         self.assertNotIn('2027-02-04', data['days'])
 
     def test_parse_blanks_holidays_lunch_and_mixed_last_period(self):

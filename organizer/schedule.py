@@ -156,9 +156,9 @@ def schedule_snapshot(path, source, now=None):
     data = deepcopy(_cached_schedule(str(path.resolve()), stat.st_mtime_ns, stat.st_size))
     now = now or datetime.now(ZoneInfo('Asia/Seoul'))
     today = now.astimezone(ZoneInfo('Asia/Seoul')).date()
-    monday = today - timedelta(days=today.weekday())
+    sunday = today - timedelta(days=(today.weekday()+1) % 7)
     data.update(source=source, available=True, timezone='Asia/Seoul', today=today.isoformat(),
-                week_start=monday.isoformat(), week_end=(monday+timedelta(days=27)).isoformat())
+                week_start=sunday.isoformat(), week_end=(sunday+timedelta(days=27)).isoformat())
     return data
 
 
