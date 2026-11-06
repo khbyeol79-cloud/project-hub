@@ -1,0 +1,21 @@
+[Unit]
+Description=Discord channel archive to Google Drive
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=khb
+WorkingDirectory=/home/khb/discord-drive-archive
+EnvironmentFile=/home/khb/.config/discord-drive-archive/bot.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/khb/discord-drive-archive/.venv/bin/python -m drive_archive.bot
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
